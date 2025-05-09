@@ -32,24 +32,6 @@ func generateRandomData(size int) []float64 {
 	return data
 }
 
-func benchmarkTensorCreation_GoTorch(dim int, iterations int) time.Duration {
-	var totalDuration time.Duration
-	shape := []int{dim, dim}
-	numElements := dim * dim
-
-	for i := 0; i < iterations; i++ {
-		data := generateRandomData(numElements) 
-		start := time.Now()
-		_, err := tensor.NewTensor(shape, data)
-		if err != nil {
-			log.Fatalf("GoTorch: Error creating tensor: %v", err)
-		}
-		totalDuration += time.Since(start)
-	}
-	return totalDuration / time.Duration(iterations)
-}
-
-
 
 // we perform the following dimension-based tasks (for 100 iterations):
 // 1) element wise addition        - 128, 512, 1024 
