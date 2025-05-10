@@ -210,7 +210,7 @@ func benchmarkForwardBackward_GoTorch(batchSize, inputDim, hiddenDim, outputDim 
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())   
+	rand.Seed(time.Now().UnixNano())  // deprecated but works, ig. you could change it. :)
 	fmt.Println("--- Go-Torch Benchmarks ---")
 	fmt.Printf("Iterations per benchmark: %d\n\n", numIterations)
 
