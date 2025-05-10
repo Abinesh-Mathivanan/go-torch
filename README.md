@@ -30,7 +30,7 @@ some todo's are written inside the files. use 'better comments' extension for be
 
 
 
-| Benchmark                      | Configuration                  | Avg Time per Iteration |
+| Operation                      | Configuration                  | Avg Time per Iteration |
 |-------------------------------|--------------------------------|-------------------------|
 | **Linear Layer Forward**      | Batch: 32, In: 128, Out: 10     | 310.494 µs              |
 | **CrossEntropyLoss**          | Batch: 32, Classes: 10          | 39.996 µs               |
