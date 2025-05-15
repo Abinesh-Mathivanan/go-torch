@@ -1,3 +1,4 @@
+// File: main.go
 package main
 
 import (
@@ -6,6 +7,7 @@ import (
 
 	"go-torch/nn"
 	"go-torch/tensor"
+	"go-torch/optimizer"
 )
 
 func main() {
@@ -84,7 +86,7 @@ func main() {
 
 
 	fmt.Println("--> activation functions")
-	
+
 	dataActivation := []float64{-2.0, -0.5, 0.0, 0.5, 2.0}
 	tensorActivationInput, err := tensor.NewTensor([]int{1, 5}, dataActivation)
 	if err != nil {
@@ -123,8 +125,8 @@ func main() {
 
 
 
-	// Softmax 
-	softmaxInputData := []float64{1.0, 2.0, 0.5} 
+	// Softmax
+	softmaxInputData := []float64{1.0, 2.0, 0.5}
 	softmaxInput, err := tensor.NewTensor([]int{1, 3}, softmaxInputData)
 	if err != nil {
 		log.Fatalf("Error creating softmaxInput: %v", err)
@@ -141,7 +143,7 @@ func main() {
 
 
 
-// ------------------- Layer and Loss section ------------- // 
+// ------------------- Layer and Loss section ------------- //
 
 	fmt.Println("--- Linear Layer, Loss, and Autograd Demo ---")
 
@@ -149,7 +151,7 @@ func main() {
 	// Define a simple network: input -> Linear -> RELU -> Loss
 	inputDim := 2
 	outputDim := 3
-	batchSize := 1 
+	batchSize := 1
 
 
 
@@ -159,7 +161,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error creating input x: %v", err)
 	}
-	x.RequiresGrad = true 
+	x.RequiresGrad = true
 	fmt.Print("Input x: ")
 	tensor.PrintTensor(x)
 
@@ -204,7 +206,7 @@ func main() {
 	// 5. Define Targets
 	// For CrossEntropyLoss, targets are class indices.
 	// If outputDim is 3, target could be 0, 1, or 2.
-	targets := []int{1} 
+	targets := []int{1}
 
 
 
@@ -251,7 +253,7 @@ func main() {
 	// 9. Zero Gradients
 	fmt.Println("\nZeroing Gradients...")
 	x.ZeroGrad()
-	linearLayer.ZeroGrad() 
+	linearLayer.ZeroGrad()
 
 	fmt.Println("Gradients after ZeroGrad:")
 	fmt.Print("Gradient for input x (after ZeroGrad): ")
@@ -295,6 +297,152 @@ func main() {
 	}
 	fmt.Print("MatMul(A, B): ")
 	tensor.PrintTensor(matMulResult)
+
+
+	fmt.Println("\n--- stats achieved ---")
+
+
+
+
+	// ------------------- Optimizer  ------------- //
+
+
+
+	fmt.Println("--> optimizer test")
+
+	// simple network params 
+	inputDimOpt := 2
+	hiddenDimOpt := 3
+	outputDimOpt := 1 
+
+
+
+	// Input tensor
+	inputDataOpt := []float64{0.8, -0.5} // batch_size=1, input_dim=2
+	xOpt, err := tensor.NewTensor([]int{1, inputDimOpt}, inputDataOpt)
+	if err != nil {
+		log.Fatalf("Error creating input xOpt: %v", err)
+	}
+	xOpt.RequiresGrad = true
+
+
+
+	// Create layers
+	layer1Opt, err := nn.NewLinear(inputDimOpt, hiddenDimOpt)
+	if err != nil {
+		log.Fatalf("Error creating layer1Opt: %v", err)
+	}
+
+	layer2Opt, err := nn.NewLinear(hiddenDimOpt, outputDimOpt)
+	if err != nil {
+		log.Fatalf("Error creating layer2Opt: %v", err)
+	}
+
+
+
+	// Collect all parameters from both layers
+	var allParams []*tensor.Tensor
+	allParams = append(allParams, layer1Opt.Parameters()...)
+	allParams = append(allParams, layer2Opt.Parameters()...)
+
+
+
+	// Create an SGD optimizer
+	learningRate := 0.1
+	sgdOptimizer, err := optimizer.NewSGD(allParams, learningRate)
+	if err != nil {
+		log.Fatalf("Error creating SGD optimizer: %v", err)
+	}
+	fmt.Printf("Created SGD optimizer with learning rate %f\n", learningRate)
+
+
+	// Target for the loss function
+	targetsOpt := []int{0} 
+
+
+	// --- one training step ---
+
+	fmt.Println("\n--- Before Optimization Step ---")
+	fmt.Println("Layer 1 Parameters (Before):") 
+    for _, p := range layer1Opt.Parameters() { 
+        tensor.PrintTensor(p)
+    }
+	fmt.Println("Layer 2 Parameters (Before):") 
+    for _, p := range layer2Opt.Parameters() { 
+        tensor.PrintTensor(p)
+    }
+
+
+	// 1. Zero gradients (important before a new backward pass)
+	fmt.Println("\nZeroing Gradients...")
+	sgdOptimizer.ZeroGrad()
+    fmt.Println("Layer 1 Parameters Grad (After ZeroGrad): ") 
+    for _, p := range layer1Opt.Parameters() { 
+        tensor.PrintTensor(p) 
+    }
+	fmt.Println("Layer 2 Parameters Grad (After ZeroGrad): ") 
+    for _, p := range layer2Opt.Parameters() { 
+        tensor.PrintTensor(p) 
+    }
+
+
+
+	// 2. Forward pass
+	fmt.Println("\nPerforming Forward Pass...")
+	hOpt, err := layer1Opt.Forward(xOpt)
+	if err != nil { log.Fatalf("Error in layer1Opt forward: %v", err) }
+
+	logitsOpt, err := layer2Opt.Forward(hOpt) // Use hOpt directly if no activation here
+	if err != nil { log.Fatalf("Error in layer2Opt forward: %v", err) }
+	fmt.Print("Logits Output: ")
+	tensor.PrintTensor(logitsOpt)
+
+
+
+	// 3. Calculate Loss
+	lossOpt, err := nn.CrossEntropyLoss(logitsOpt, targetsOpt)
+	if err != nil { log.Fatalf("Error calculating lossOpt: %v", err) }
+	fmt.Print("Loss: ")
+	tensor.PrintTensor(lossOpt)
+
+
+
+	// 4. Backward pass
+	fmt.Println("\nPerforming Backward Pass...")
+	if lossOpt.RequiresGrad {
+		lossOpt.Backward(nil) 
+	} else {
+		fmt.Println("Loss does not require grad, cannot perform backward.")
+	}
+
+	fmt.Println("\nGradients after Backward Pass:")
+	fmt.Println("Layer 1 Parameters Grad (After Backward):") 
+    for _, p := range layer1Opt.Parameters() { 
+        tensor.PrintTensor(p) 
+    }
+	fmt.Println("Layer 2 Parameters Grad (After Backward):") 
+    for _, p := range layer2Opt.Parameters() { 
+        tensor.PrintTensor(p) 
+    }
+
+
+
+	// 5. Optimizer Step
+	fmt.Printf("\nPerforming Optimizer Step with LR=%f...\n", learningRate)
+	err = sgdOptimizer.Step()
+	if err != nil {
+		log.Fatalf("Error during optimizer step: %v", err)
+	}
+
+	fmt.Println("\n--- After Optimization Step ---")
+	fmt.Println("Layer 1 Parameters (After Update): ") 
+    for _, p := range layer1Opt.Parameters() { 
+        tensor.PrintTensor(p) 
+    }
+	fmt.Println("Layer 2 Parameters (After Update): ") 
+    for _, p := range layer2Opt.Parameters() { 
+        tensor.PrintTensor(p) 
+    }
 
 
 	fmt.Println("\n--- stats achieved ---")
