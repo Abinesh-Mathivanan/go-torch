@@ -4,6 +4,8 @@ i built a simple pytorch implementation in go. till now, we support the basic li
 
 i aim to improve this to match torch's performance. 
 
+blog - https://abinesh-mathivanan.vercel.app/en/posts/post-5/
+
 <br>
 
 ## TODO
