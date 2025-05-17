@@ -26,7 +26,7 @@ some todo's are written inside the files. use 'better comments' extension for be
 |---------------------|---------------|---------------|---------------|
 | **Element-wise Add**    | 187.602 µs    | 2.326982 ms   | 9.558306 ms   |
 | **Element-wise Mul**    | 126.740 µs    | 2.256796 ms   | 10.684073 ms  |
-| **Matrix Multiply**     | 8.514523 ms   | 1.156596279 s | 15.784033 s   |
+| **Matrix Multiply**     | 1.92448ms     | 87.649736 ms  | 780.434055 ms |
 | **ReLU Activation**     | 226.385 µs    | 4.192483 ms   | 6.26745 ms    |
 
 
@@ -36,7 +36,7 @@ some todo's are written inside the files. use 'better comments' extension for be
 |-------------------------------|--------------------------------|-------------------------|
 | **Linear Layer Forward**      | Batch: 32, In: 128, Out: 10     | 310.494 µs              |
 | **CrossEntropyLoss**          | Batch: 32, Classes: 10          | 39.996 µs               |
-| **Full Forward-Backward Pass**| Net: 128-256-10, Batch: 32      | 28.68176 ms             |
+| **Full Forward-Backward Pass**| Net: 128-256-10, Batch: 32      | 10.54919 ms           |
 
 
 <br>
