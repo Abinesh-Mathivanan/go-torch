@@ -2,6 +2,8 @@ package tensor
 
 import (
 	"fmt"
+	"sync"
+	"runtime"
 )
 
 
@@ -41,22 +43,40 @@ func IsSameSize(a, b *Tensor) bool {
 // builds a new tensor with the given shape and data
 func NewTensor(shape []int, data []float64) (*Tensor, error) {
 	total := 1
-	for _, dim := range shape {
-		if dim <= 0 {
-			return nil, fmt.Errorf("shape %v contains non-positive dimension", shape)
-		}
-		total *= dim
-	}
+    if len(shape) == 0 { // Scalar case
+        if len(data) == 0 {
+            total = 1 // Default scalar has 1 element
+        } else if len(data) == 1 {
+            total = 1
+        } else {
+            return nil, fmt.Errorf("scalar shape [] implies 1 element but data has length %d", len(data))
+        }
+    } else {
+        for _, dim := range shape {
+            if dim <= 0 {
+                return nil, fmt.Errorf("shape %v contains non-positive dimension", shape)
+            }
+            total *= dim
+        }
+    }
+
 	if len(data) > 0 && total != len(data) {
 		return nil, fmt.Errorf("shape %v implies %d elements but data has length %d", shape, total, len(data))
 	}
-	if len(data) == 0 && total > 0 {
-		data = make([]float64, total)
-	}
+	
+    // Ensure data slice is allocated if input data is nil or empty and total > 0
+    var finalData []float64
+    if len(data) == 0 {
+        finalData = make([]float64, total) // Initialize with zeros
+    } else {
+        finalData = make([]float64, total)
+        copy(finalData, data)
+    }
+
 
 	return &Tensor{
-		shape:        append([]int{}, shape...),
-		data:         append([]float64{}, data...),
+		shape:        append([]int{}, shape...), // Defensive copy of shape
+		data:         finalData,                 // Use the new/copied data
 		Grad:         nil,
 		RequiresGrad: false,
 		Parents:      nil,
@@ -358,6 +378,10 @@ func Transpose(t *Tensor) (*Tensor, error) {
 	if len(shape) < 2 {
 		return nil, fmt.Errorf("transpose requires a tensor with at least 2 dimensions, got %v", shape)
 	}
+    // Current implementation only handles 2D correctly.
+    if len(shape) != 2 {
+         return nil, fmt.Errorf("transpose currently only supports 2D tensors, got %v", shape)
+    }
 
 	newShape := append([]int{}, shape...)
 	lastDimIdx := len(newShape) - 1
@@ -365,50 +389,31 @@ func Transpose(t *Tensor) (*Tensor, error) {
 	newShape[lastDimIdx], newShape[secondLastDimIdx] = newShape[secondLastDimIdx], newShape[lastDimIdx]
 
 	originalNumel := Numel(t)
-	newNumel := Numel(&Tensor{shape: newShape}) 
+	// newNumel calc was a bit off, should use newShape for Numel
+	_ = originalNumel // To use originalNumel if needed for checks, currently newNumel is enough
+	
+    tempNewTensorForNumel, err := NewTensor(newShape, nil) // Create a temporary tensor to calculate numel based on newShape
+    if err != nil {
+        return nil, fmt.Errorf("transpose error: could not form new shape %v: %w", newShape, err)
+    }
+    newNumel := Numel(tempNewTensorForNumel)
+
+
 	if originalNumel != newNumel {
-		return nil, fmt.Errorf("transpose error: element count mismatch %d != %d", originalNumel, newNumel)
+		return nil, fmt.Errorf("transpose error: element count mismatch %d != %d for new shape %v from old shape %v", originalNumel, newNumel, newShape, shape)
 	}
 
 	outData := make([]float64, originalNumel)
 	tData := t.GetData()
 
-
-	// calculate strides for original and transposed tensors
-	// stride for original [..., M, N] is [..., N, 1]
-	originalStrides := make([]int, len(shape))
-	stride := 1
-	for i := len(shape) - 1; i >= 0; i-- {
-		originalStrides[i] = stride
-		stride *= shape[i]
-	}
-
-
-	// stride for transposed [..., N, M] is [..., M, 1]
-	transposedStrides := make([]int, len(newShape))
-	stride = 1
-	for i := len(newShape) - 1; i >= 0; i-- {
-		transposedStrides[i] = stride
-		stride *= newShape[i]
-	}
-
-
-	// Map original flat index to multi-dimensional index, then to transposed multi-dimensional index, then to transposed flat index.
-	// This is complex for generic N-D. Let's simplify for 2D [M, N] -> [N, M]
-	if len(shape) == 2 {
-		M, N := shape[0], shape[1]
-		// Access element at original index (row, col) -> flat index row*N + col
-		// Map to transposed index (col, row) -> flat index col*M + row
-		for r := 0; r < M; r++ {
-			for c := 0; c < N; c++ {
-				originalFlatIndex := r*N + c
-				transposedFlatIndex := c*M + r
-				outData[transposedFlatIndex] = tData[originalFlatIndex]
-			}
+	// Simplified for 2D [M, N] -> [N, M]
+	M, N := shape[0], shape[1]
+	for r := 0; r < M; r++ {
+		for c := 0; c < N; c++ {
+			originalFlatIndex := r*N + c
+			transposedFlatIndex := c*M + r
+			outData[transposedFlatIndex] = tData[originalFlatIndex]
 		}
-	} else {
-		// TODO: as i mentioned before, a proper N-D transpose would involve mapping linear index back to N-D index.
-		return nil, fmt.Errorf("transpose only supports 2D tensors currently, got %v", shape)
 	}
 
 	out, err := NewTensor(newShape, outData)
@@ -422,7 +427,6 @@ func Transpose(t *Tensor) (*Tensor, error) {
 		out.Operation = "transpose"
 		out.BackwardFunc = func(grad *Tensor) {
 			if t.RequiresGrad {
-				// grad(transpose) = transpose(grad)
 				transposedGrad, err := Transpose(grad)
 				if err != nil {
 					fmt.Printf("Warning: Failed to transpose gradient in Transpose backward: %v\n", err)
@@ -432,7 +436,6 @@ func Transpose(t *Tensor) (*Tensor, error) {
 			}
 		}
 	}
-
 	return out, nil
 }
 
@@ -447,83 +450,72 @@ func MatMulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 	shape1 := t1.GetShape()
 	shape2 := t2.GetShape()
 
-	if len(shape1) < 2 || len(shape2) < 2 {
-        return nil, fmt.Errorf("matmul requires tensors with at least 2 dimensions, got %v and %v", shape1, shape2)
-    }
-
-	// assume t1 is [..., M, K] and t2 is [..., K, N].
-	// core multiplication is on the last two dimensions.
-	// dimensions before the last two must be broadcastable or match.
-	// For Linear layer input [B, I] and weight [I, O]:
-	// t1: [B, I], t2: [I, O]
-	// M=B, K=I, N=O. Inner dimensions match: I.
-	// result shape: [B, O]. Batch dimension B must match or be broadcastable.
-	// our current tensor structure doesn't explicitly handle batching,
-	// so let's assume t1 is [Batch*M, K] and t2 is [K, N] or we only support 2D [M, K] @ [K, N].
-	// since linear layer applies batching, t1 is [B, K] and t2 is [K, N].
-
-	// Input: t1 shape [B, K], t2 shape [K, N]
-	
-	k1 := shape1[len(shape1)-1] 
-	k2 := shape2[len(shape2)-2] 
-	if k1 != k2 {
-		return nil, fmt.Errorf("matmul incompatible shapes: inner dimensions mismatch %v and %v (%d != %d)", shape1, shape2, k1, k2)
-	}
-
-	// Output shape: [B, N]
-	
-	// leading dimensions of t1 and t2 (excluding the last two) must match or be broadcastable.
-	// for input [B, I] and weight [I, O], t1 [B, K], t2 [K, N], the leading dimensions are [] and [].
-	// if t1 was [A, B, K] and t2 [K, N], result is [A, B, N].
-	// if t1 was [B, K] and t2 [A, K, N], broadcasting rules are more complex.
-	// let's strictly require t1 to be [B, K] and t2 to be [K, N] for now.
 	if len(shape1) != 2 || len(shape2) != 2 {
-         return nil, fmt.Errorf("matmul only supports 2D tensors ([B, K] @ [K, N]) currently, got %v and %v", shape1, shape2)
-    }
-	
-	// rename variables to match standard matmul notation [M, K] @ [K, N] -> [M, N]
-	// input: [M, K], weight: [K, N]
-	
-	M := shape1[0] // batch size
-	K := shape1[1] // input dimensions
-
-	// shape2 is weight: [In, Out] -> [K_weight, N_weight]
-	K_weight := shape2[0]
-	N_weight := shape2[1] 
-
-	if K != K_weight {
-		return nil, fmt.Errorf("matmul incompatible shapes: inner dimensions mismatch %v and %v (%d != %d)", shape1, shape2, K, K_weight)
+		return nil, fmt.Errorf("matmul optimized version currently supports 2D tensors only, got %v and %v", shape1, shape2)
 	}
-	N := N_weight 
 
-	outShape := []int{M, N} // [batch, output]
-	outNumel := M * N
-	outData := make([]float64, outNumel)
+	M := shape1[0]
+	K1 := shape1[1] 
+	K2 := shape2[0] 
+	N := shape2[1]
+
+	if K1 != K2 {
+		return nil, fmt.Errorf("matmul incompatible shapes: inner dimensions mismatch %v (%d) and %v (%d)", shape1, K1, shape2, K2)
+	}
+	K := K1 
+
+	outShape := []int{M, N}
+	outData := make([]float64, M*N)
 
 	t1Data := t1.GetData()
-	t2Data := t2.GetData()
-
-	// performs matrix multiplication C[i][j] = sum_k(A[i][k] * B[k][j])
-	// A is t1 ([M, K]), B is t2 ([K, N])
-	// Result C is outData ([M, N])
-	for i := 0; i < M; i++ { 
-		for j := 0; j < N; j++ { 
-			sum := 0.0
-			for k_idx := 0; k_idx < K; k_idx++ { 
-
-				t1Val := t1Data[i*K + k_idx]
-				t2Val := t2Data[k_idx*N + j]
-
-				sum += t1Val * t2Val
-			}
-			outData[i*N + j] = sum
-		}
+	t2Transposed, err := Transpose(t2) // cache locality
+	if err != nil {
+		return nil, fmt.Errorf("matmul failed to transpose t2: %w", err)
 	}
+	t2TransposedData := t2Transposed.GetData() // Shape [N, K]
 
+	// parallelization using go-routines
+	numGoroutines := runtime.NumCPU() 
+	rowsPerGoroutine := (M + numGoroutines - 1) / numGoroutines 
+
+	var wg sync.WaitGroup
+
+	for i := 0; i < numGoroutines; i++ {
+		startRow := i * rowsPerGoroutine
+		endRow := (i + 1) * rowsPerGoroutine
+		if endRow > M {
+			endRow = M
+		}
+
+		if startRow >= endRow { 
+			continue
+		}
+		
+		wg.Add(1)
+		go func(sR, eR int) {
+			defer wg.Done()
+			for rIdx := sR; rIdx < eR; rIdx++ { 
+				for cIdx := 0; cIdx < N; cIdx++ {
+					sum := 0.0
+					// t1Data is M x K
+					// t2TransposedData is N x K
+					// outData is M x N
+					// Dot product of row rIdx of t1 and row cIdx of t2Transposed (which is col cIdx of t2)
+					t1RowOffset := rIdx * K
+					t2TRowOffset := cIdx * K 
+					for kIdx := 0; kIdx < K; kIdx++ {
+						sum += t1Data[t1RowOffset+kIdx] * t2TransposedData[t2TRowOffset+kIdx]
+					}
+					outData[rIdx*N+cIdx] = sum
+				}
+			}
+		}(startRow, endRow)
+	}
+	wg.Wait()
 
 	out, err := NewTensor(outShape, outData)
 	if err != nil {
-		return nil, fmt.Errorf("matmul failed to create output tensor: %w", err)
+		return nil, fmt.Errorf("matmul optimized failed to create output tensor: %w", err)
 	}
 
 	if t1.RequiresGrad || t2.RequiresGrad {
@@ -532,29 +524,22 @@ func MatMulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 		out.Operation = "matmul"
 
 		out.BackwardFunc = func(grad *Tensor) {
-			// chain rule: dL/dX = dL/dO @ W.T
-			// chain rule: dL/dW = X.T @ dL/dO
-			// O is the output of matmul, X is t1, W is t2, dL/dO is grad
-
-			gradShape := grad.GetShape()
-             if len(gradShape) != 2 || gradShape[0] != M || gradShape[1] != N {
-                fmt.Printf("Warning: MatMul backward received incorrect gradient shape %v, expected %v\n", gradShape, outShape)
-                return 
-            }
-
+			// dL/dX = dL/dO @ W.T  => grad @ t2.T
+			// dL/dW = X.T @ dL/dO  => t1.T @ grad
+			// these will themselves use the optimized MatMulTensor
 
 			if t1.RequiresGrad {
-				// compute dL/dX = dL/dO @ W.T
-				// grad shape [M, N], t2 shape [K, N]
-				// W.T shape [N, K] (Transpose of t2)
-				// dL/dX shape [M, K] (Same as t1)
-				t2Transposed, err := Transpose(t2)
-				if err != nil {
-					fmt.Printf("Warning: Failed to transpose t2 in MatMul backward: %v\n", err)
+				// t2.T is t2Transposed which we already have if t2 was not modified.
+				// however, t2 could have been modified, so it's safer to re-transpose.
+				// or, ensure t2Transposed from forward pass is correctly captured if safe.
+				// for safety, let's re-transpose t2.
+				t2T_for_grad, err_t2t := Transpose(t2)
+				if err_t2t != nil {
+					fmt.Printf("Warning: MatMul backward failed to transpose t2: %v\n", err_t2t)
 				} else {
-					gradForT1, err := MatMulTensor(grad, t2Transposed) // MatMul: grad [M, N] @ t2Transposed [N, K] -> result [M, K]
-					if err != nil {
-						fmt.Printf("Warning: Failed to compute grad for t1 in MatMul backward: %v\n", err)
+					gradForT1, err_gt1 := MatMulTensor(grad, t2T_for_grad)
+					if err_gt1 != nil {
+						fmt.Printf("Warning: MatMul backward failed to compute grad for t1: %v\n", err_gt1)
 					} else {
 						t1.Backward(gradForT1)
 					}
@@ -562,20 +547,14 @@ func MatMulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 			}
 
 			if t2.RequiresGrad {
-				// compute dL/dW = X.T @ dL/dO
-				// t1 shape [M, K], grad shape [M, N]
-				// X.T shape [K, M] (Transpose of t1)
-				// dL/dW shape [K, N] (Same as t2)
-				t1Transposed, err := Transpose(t1)
-				if err != nil {
-					fmt.Printf("Warning: Failed to transpose t1 in MatMul backward: %v\n", err)
+				t1T_for_grad, err_t1t := Transpose(t1)
+				if err_t1t != nil {
+					fmt.Printf("Warning: MatMul backward failed to transpose t1: %v\n", err_t1t)
 				} else {
-					gradForT2, err := MatMulTensor(t1Transposed, grad) // MatMul: t1Transposed [K, M] @ grad [M, N] -> result [K, N]
-					if err != nil {
-						fmt.Printf("Warning: Failed to compute grad for t2 in MatMul backward: %v\n", err)
+					gradForT2, err_gt2 := MatMulTensor(t1T_for_grad, grad)
+					if err_gt2 != nil {
+						fmt.Printf("Warning: MatMul backward failed to compute grad for t2: %v\n", err_gt2)
 					} else {
-						// * if t2 (weight) was involved in multiple forward ops (e.g., shared weights),
-						// * its gradient needs to be accumulated. t.Backward() handles this accumulation.
 						t2.Backward(gradForT2)
 					}
 				}
@@ -585,7 +564,6 @@ func MatMulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 
 	return out, nil
 }
-
 
 
 // prints the tensor in readable format 
