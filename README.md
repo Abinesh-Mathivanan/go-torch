@@ -22,21 +22,15 @@ some todo's are written inside the files. use 'better comments' extension for be
 
 ## Benchmark
 
-| Operation           | 128×128       | 512×512       | 1024×1024     |
-|---------------------|---------------|---------------|---------------|
-| **Element-wise Add**    | 187.602 µs    | 2.326982 ms   | 9.558306 ms   |
-| **Element-wise Mul**    | 126.740 µs    | 2.256796 ms   | 10.684073 ms  |
-| **Matrix Multiply**     | 1.92448ms     | 87.649736 ms  | 780.434055 ms |
-| **ReLU Activation**     | 226.385 µs    | 4.192483 ms   | 6.26745 ms    |
-
-
-
-
-| Operation                      | Configuration                  | Avg Time per Iteration |
-|-------------------------------|--------------------------------|-------------------------|
-| **Linear Layer Forward**      | Batch: 32, In: 128, Out: 10     | 310.494 µs              |
-| **CrossEntropyLoss**          | Batch: 32, Classes: 10          | 39.996 µs               |
-| **Full Forward-Backward Pass**| Net: 128-256-10, Batch: 32      | 10.54919 ms           |
+| Benchmark Detail                          | 128x128      | 512x512     | 1024x1024    |
+|:------------------------------------------|:-------------|:------------|:-------------|
+| **Matrix Multiply**                       | 510.33 µs    | 13.54 ms    | 130.50 ms    |
+| Element-wise Add                          | 71.72 µs     | 1.29 ms     | 4.13 ms      |
+| Element-wise Mul                          | 47.83 µs     | 1.63 ms     | 3.91 ms      |
+| ReLU Activation                           | 121.18 µs    | 1.75 ms     | 6.45 ms      |
+| **Linear Layer Forward (B32,I128,O10)**   | 71.93 µs     |             |              |
+| **CrossEntropyLoss (B32,C10)**            | 11.16 µs     |             |              |
+| **Full Fwd-Bwd (Net:128-256-10, B32)**    | 4.02 ms      |             |              |
 
 
 <br>
