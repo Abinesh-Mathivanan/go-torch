@@ -4,11 +4,64 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"bytes" 
+	"encoding/gob"
 
 	"gonum.org/v1/gonum/mat" // For Dense matrix type and operations To use system-installed C BLAS
 )
 
 // NOTE: Most of the functions are self-explanatory, doesn't need much comments / explaantion (except the auto-grad part)
+
+
+
+// fully gob functionality - for model saving 
+func init() {
+    gob.Register(&Tensor{})
+}
+
+
+type tensorGob struct {
+	Shape []int
+	Data  []float64
+}
+
+
+func (t *Tensor) GobEncode() ([]byte, error) {
+	// We will encode our data into a buffer.
+	var buf bytes.Buffer
+	encoder := gob.NewEncoder(&buf)
+
+	// Create an instance of our temporary exported struct and copy the data to it.
+	err := encoder.Encode(tensorGob{
+		Shape: t.shape,
+		Data:  t.data,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (t *Tensor) GobDecode(data []byte) error {
+	// create a buffer from the incoming byte slice.
+	buf := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(buf)
+
+	// decode the data into our temporary exported struct.
+	var tg tensorGob
+	err := decoder.Decode(&tg)
+	if err != nil {
+		return err
+	}
+
+	// copy the data from the temporary struct back into our Tensor's unexported fields.
+	t.shape = tg.Shape
+	t.data = tg.Data
+	
+	return nil
+}
+
 
 // simple Tensor struct
 type Tensor struct {
@@ -537,6 +590,147 @@ func MatMulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 
 	return out, nil
 }
+
+
+// Permute reorders the dimensions of a tensor according to the given axes.
+func Permute(t *Tensor, axes []int) (*Tensor, error) {
+	if len(t.shape) != len(axes) {
+		return nil, fmt.Errorf("permute: number of axes (%d) must match tensor rank (%d)", len(axes), len(t.shape))
+	}
+	
+	newShape := make([]int, len(t.shape))
+	for i, axis := range axes {
+		newShape[i] = t.shape[axis]
+	}
+	
+	outData := make([]float64, Numel(t))
+	
+	// A fast path for the common Conv2D case: [C, B, H, W] -> [B, C, H, W] (axes {1, 0, 2, 3})
+	if len(t.shape) == 4 && len(axes) == 4 && axes[0] == 1 && axes[1] == 0 && axes[2] == 2 && axes[3] == 3 {
+		C, B, H, W := t.shape[0], t.shape[1], t.shape[2], t.shape[3]
+		tData := t.GetData()
+		for b := 0; b < B; b++ {
+			for c := 0; c < C; c++ {
+				for h := 0; h < H; h++ {
+					for w := 0; w < W; w++ {
+						srcIndex := c*(B*H*W) + b*(H*W) + h*W + w
+						destIndex := b*(C*H*W) + c*(H*W) + h*W + w
+						outData[destIndex] = tData[srcIndex]
+					}
+				}
+			}
+		}
+	} else {
+		// A generic N-D implementation is complex and not included here for brevity.
+		return nil, fmt.Errorf("permute currently only supports the specific [1, 0, 2, 3] permutation for 4D tensors")
+	}
+
+	out, err := NewTensor(newShape, outData)
+	if err != nil {
+		return nil, err
+	}
+
+	if t.RequiresGrad {
+		out.RequiresGrad = true
+		out.Parents = []*Tensor{t}
+		out.Operation = "permute"
+		out.BackwardFunc = func(grad *Tensor) {
+			if t.RequiresGrad {
+				inverseAxes := make([]int, len(axes))
+				for i, axis := range axes {
+					inverseAxes[axis] = i
+				}
+				gradForT, err := Permute(grad, inverseAxes)
+				if err != nil {
+					panic(fmt.Sprintf("error permuting gradient: %v", err))
+				}
+				t.Backward(gradForT)
+			}
+		}
+	}
+
+	return out, nil
+}
+
+
+// AddTensorBroadcast performs element-wise addition with broadcasting.
+// It currently supports adding a 1D tensor (b) to a 4D tensor (a).
+// Shape a: [Batch, Channels, H, W], Shape b: [Channels]
+func AddTensorBroadcast(a *Tensor, b *Tensor) (*Tensor, error) {
+	aShape := a.GetShape()
+	bShape := b.GetShape()
+
+	if len(aShape) != 4 || len(bShape) != 1 || aShape[1] != bShape[0] {
+		return nil, fmt.Errorf("unsupported broadcast: a=%v, b=%v. Only 4D + 1D on channel dim supported", aShape, bShape)
+	}
+
+	outData := make([]float64, Numel(a))
+	aData := a.GetData()
+	bData := b.GetData()
+	
+	B, C, H, W := aShape[0], aShape[1], aShape[2], aShape[3]
+	
+	numGoroutines := runtime.NumCPU()
+	var wg sync.WaitGroup
+
+	// Parallelize over the batch dimension, which is the outermost and safest dimension to parallelize.
+	batchesPerGo := (B + numGoroutines - 1) / numGoroutines
+	for i := 0; i < numGoroutines; i++ {
+		startBatch := i * batchesPerGo
+		endBatch := (i + 1) * batchesPerGo
+		if endBatch > B {
+			endBatch = B
+		}
+		if startBatch >= endBatch {
+			continue
+		}
+
+		wg.Add(1)
+		go func(sB, eB int) {
+			defer wg.Done()
+			for b_idx := sB; b_idx < eB; b_idx++ {
+				for c_idx := 0; c_idx < C; c_idx++ {
+					biasVal := bData[c_idx]
+					offset := b_idx*(C*H*W) + c_idx*(H*W)
+					for i := 0; i < H*W; i++ {
+						idx := offset + i
+						outData[idx] = aData[idx] + biasVal
+					}
+				}
+			}
+		}(startBatch, endBatch)
+	}
+	wg.Wait()
+	
+	out, err := NewTensor(aShape, outData)
+	if err != nil { return nil, err }
+
+	if a.RequiresGrad || b.RequiresGrad {
+		out.RequiresGrad = true
+		out.Parents = []*Tensor{a, b}
+		out.Operation = "add_broadcast"
+		out.BackwardFunc = func(grad *Tensor) {
+			if a.RequiresGrad {
+				a.Backward(grad) 
+			}
+			if b.RequiresGrad {
+				gradData := grad.GetData()
+				gradForBData := make([]float64, C)
+				for i := 0; i < B; i++ {
+					for j := 0; j < C; j++ {
+						for k := 0; k < H*W; k++ {
+							gradForBData[j] += gradData[i*(C*H*W) + j*(H*W) + k]
+						}
+					}
+				}
+				gradForB, _ := NewTensor(bShape, gradForBData)
+				b.Backward(gradForB)
+			}
+		}
+	}
+	return out, nil
+}
+
 
 // prints the tensor in readable format
 func PrintTensor(t *Tensor) {
