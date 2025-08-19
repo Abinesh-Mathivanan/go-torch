@@ -173,17 +173,13 @@ func AddTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 		out.Operation = "add"
 
 		out.BackwardFunc = func(grad *Tensor) {
+			// The gradient of addition is 1, so we just pass the incoming
+			// gradient to both parents.
 			if t1.RequiresGrad {
-				gradDataForT1 := make([]float64, len(grad.data))
-				copy(gradDataForT1, grad.data)
-				t1Grad, _ := NewTensor(t1.shape, gradDataForT1)
-				t1.Backward(t1Grad)
+				t1.Backward(grad) // Backward now accumulates
 			}
 			if t2.RequiresGrad {
-				gradDataForT2 := make([]float64, len(grad.data))
-				copy(gradDataForT2, grad.data)
-				t2Grad, _ := NewTensor(t2.shape, gradDataForT2)
-				t2.Backward(t2Grad)
+				t2.Backward(grad) // Backward now accumulates
 			}
 		}
 	}
@@ -212,22 +208,57 @@ func MulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 		out.Operation = "mul"
 
 		out.BackwardFunc = func(grad *Tensor) {
+			var wg sync.WaitGroup
+			numGoroutines := runtime.NumCPU()
+			jobsPerGo := (len(grad.data) + numGoroutines - 1) / numGoroutines
+
 			if t1.RequiresGrad {
-				gradDataForT1 := make([]float64, len(grad.data))
-				for i := range gradDataForT1 {
-					gradDataForT1[i] = grad.data[i] * t2.data[i]
-				}
-				t1Grad, _ := NewTensor(t1.shape, gradDataForT1)
-				t1.Backward(t1Grad)
+				if t1.Grad == nil { t1.ZeroGrad() } // Ensure grad tensor exists
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					t1GradData := t1.Grad.GetData()
+					gradData := grad.GetData()
+					t2Data := t2.GetData()
+					for i := 0; i < numGoroutines; i++ {
+						start, end := i*jobsPerGo, (i+1)*jobsPerGo
+						if end > len(gradData) { end = len(gradData) }
+						if start >= end { continue }
+						// Launch inner goroutine for parallel accumulation
+						wg.Add(1)
+						go func(s, e int) {
+							defer wg.Done()
+							for j := s; j < e; j++ {
+								t1GradData[j] += gradData[j] * t2Data[j]
+							}
+						}(start, end)
+					}
+				}()
 			}
+
 			if t2.RequiresGrad {
-				gradDataForT2 := make([]float64, len(grad.data))
-				for i := range gradDataForT2 {
-					gradDataForT2[i] = grad.data[i] * t1.data[i]
-				}
-				t2Grad, _ := NewTensor(t2.shape, gradDataForT2)
-				t2.Backward(t2Grad)
+				if t2.Grad == nil { t2.ZeroGrad() } // Ensure grad tensor exists
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					t2GradData := t2.Grad.GetData()
+					gradData := grad.GetData()
+					t1Data := t1.GetData()
+					for i := 0; i < numGoroutines; i++ {
+						start, end := i*jobsPerGo, (i+1)*jobsPerGo
+						if end > len(gradData) { end = len(gradData) }
+						if start >= end { continue }
+						wg.Add(1)
+						go func(s, e int) {
+							defer wg.Done()
+							for j := s; j < e; j++ {
+								t2GradData[j] += gradData[j] * t1Data[j]
+							}
+						}(start, end)
+					}
+				}()
 			}
+			wg.Wait()
 		}
 	}
 	return out, nil
@@ -291,9 +322,9 @@ func Reshape(t *Tensor, newShape []int) (*Tensor, error) {
 		out.Operation = "reshape"
 		out.BackwardFunc = func(grad *Tensor) {
 			if t.RequiresGrad {
-				gradDataForT := make([]float64, len(grad.data))
-				copy(gradDataForT, grad.data)
-				reshapedGradForT, _ := NewTensor(append([]int{}, t.shape...), gradDataForT)
+				// The gradient must be reshaped back to the parent's original shape.
+				// The data itself doesn't change, just the view.
+				reshapedGradForT, _ := NewTensor(append([]int{}, t.shape...), grad.data)
 				t.Backward(reshapedGradForT)
 			}
 		}
@@ -364,22 +395,27 @@ func (t *Tensor) Backward(grad *Tensor) {
 		return
 	}
 
-	currentNumel := Numel(t)
+	// This function is now ONLY a gradient accumulator.
+	// The autograd engine is responsible for calling t.BackwardFunc.
 
 	if grad == nil {
-		if currentNumel == 1 {
-			tempGradData := []float64{1.0}
-			grad, _ = NewTensor(append([]int{}, t.shape...), tempGradData)
+		// This should ideally not be hit if using the autograd engine,
+		// which always starts with a gradient of 1.0 for the root.
+		if Numel(t) == 1 {
+			grad, _ = NewTensor(t.shape, []float64{1.0})
 		} else {
-			fmt.Printf("Warning: Tensor.Backward called with nil grad on non-scalar tensor %v. This might be an issue.\n", t.shape)
+			// Cannot proceed without a gradient for a non-scalar tensor.
 			return
 		}
-	} else if !IsSameSize(t, grad) {
-		fmt.Printf("Error: Mismatch in shape during backward. Tensor shape: %v, Grad shape: %v\n", t.shape, grad.shape)
+	}
+
+	if !IsSameSize(t, grad) {
+		fmt.Printf("Error: Mismatch in shape during backward accumulation. Tensor shape: %v, Grad shape: %v\n", t.shape, grad.shape)
 		return
 	}
 
 	if t.Grad == nil {
+		// If grad tensor doesn't exist, create it by copying the incoming grad.
 		gradDataCopy := make([]float64, len(grad.data))
 		copy(gradDataCopy, grad.data)
 		initializedGrad, err := NewTensor(append([]int{}, t.shape...), gradDataCopy)
@@ -388,16 +424,12 @@ func (t *Tensor) Backward(grad *Tensor) {
 			t.Grad = initializedGrad
 		} else {
 			fmt.Printf("Error initializing gradient tensor: %v\n", err)
-			return
 		}
 	} else {
+		// If it exists, accumulate.
 		for i := range t.Grad.data {
 			t.Grad.data[i] += grad.data[i]
 		}
-	}
-
-	if t.BackwardFunc != nil {
-		t.BackwardFunc(grad)
 	}
 }
 
@@ -451,6 +483,41 @@ func Transpose(t *Tensor) (*Tensor, error) {
 }
 
 const blasThreshold = 64 
+
+
+func matMulWithTranspose(t1, t2 *Tensor, transposeT1, transposeT2 bool) (*Tensor, error) {
+	shape1 := t1.GetShape()
+	shape2 := t2.GetShape()
+
+	gonumT1 := mat.NewDense(shape1[0], shape1[1], t1.GetData())
+	gonumT2 := mat.NewDense(shape2[0], shape2[1], t2.GetData())
+
+	var a, b mat.Matrix = gonumT1, gonumT2
+	if transposeT1 {
+		a = a.T()
+	}
+	if transposeT2 {
+		b = b.T()
+	}
+
+	r, c := a.Dims()
+	br, bc := b.Dims()
+	if c != br {
+		return nil, fmt.Errorf("matmul incompatible shapes after transpose")
+	}
+
+	gonumOut := mat.NewDense(r, bc, nil)
+	gonumOut.Mul(a, b)
+
+	outShape := []int{r, bc}
+	rawData := gonumOut.RawMatrix().Data
+	outData := make([]float64, len(rawData))
+	copy(outData, rawData)
+	
+	return NewTensor(outShape, outData)
+}
+
+
 
 // MatMulTensor performs matrix multiplication between two tensors.
 // Uses BLAS (via gonum) for larger matrices, falls back to parallel Go for smaller ones.
@@ -556,33 +623,22 @@ func MatMulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 		out.BackwardFunc = func(grad *Tensor) {
 			// dL/dX = dL/dO @ W.T  => grad @ t2.T
 			// dL/dW = X.T @ dL/dO  => t1.T @ grad
-			// These will themselves use the (potentially BLAS-accelerated) MatMulTensor
-
+			
 			if t1.RequiresGrad {
-				t2T_for_grad, err_t2t := Transpose(t2)
-				if err_t2t != nil {
-					fmt.Printf("Warning: MatMul backward failed to transpose t2: %v\n", err_t2t)
+				gradForT1, err := matMulWithTranspose(grad, t2, false, true) // grad * t2.T
+				if err != nil {
+					fmt.Printf("Warning: MatMul backward failed to compute grad for t1: %v\n", err)
 				} else {
-					gradForT1, err_gt1 := MatMulTensor(grad, t2T_for_grad) // Recursive call
-					if err_gt1 != nil {
-						fmt.Printf("Warning: MatMul backward failed to compute grad for t1: %v\n", err_gt1)
-					} else {
-						t1.Backward(gradForT1)
-					}
+					t1.Backward(gradForT1)
 				}
 			}
 
 			if t2.RequiresGrad {
-				t1T_for_grad, err_t1t := Transpose(t1)
-				if err_t1t != nil {
-					fmt.Printf("Warning: MatMul backward failed to transpose t1: %v\n", err_t1t)
+				gradForT2, err := matMulWithTranspose(t1, grad, true, false) // t1.T * grad
+				if err != nil {
+					fmt.Printf("Warning: MatMul backward failed to compute grad for t2: %v\n", err)
 				} else {
-					gradForT2, err_gt2 := MatMulTensor(t1T_for_grad, grad) // Recursive call
-					if err_gt2 != nil {
-						fmt.Printf("Warning: MatMul backward failed to compute grad for t2: %v\n", err_gt2)
-					} else {
-						t2.Backward(gradForT2)
-					}
+					t2.Backward(gradForT2)
 				}
 			}
 		}
@@ -660,50 +716,79 @@ func AddTensorBroadcast(a *Tensor, b *Tensor) (*Tensor, error) {
 	aShape := a.GetShape()
 	bShape := b.GetShape()
 
-	if len(aShape) != 4 || len(bShape) != 1 || aShape[1] != bShape[0] {
-		return nil, fmt.Errorf("unsupported broadcast: a=%v, b=%v. Only 4D + 1D on channel dim supported", aShape, bShape)
-	}
-
 	outData := make([]float64, Numel(a))
 	aData := a.GetData()
 	bData := b.GetData()
-	
-	B, C, H, W := aShape[0], aShape[1], aShape[2], aShape[3]
-	
-	numGoroutines := runtime.NumCPU()
-	var wg sync.WaitGroup
 
-	// Parallelize over the batch dimension, which is the outermost and safest dimension to parallelize.
-	batchesPerGo := (B + numGoroutines - 1) / numGoroutines
-	for i := 0; i < numGoroutines; i++ {
-		startBatch := i * batchesPerGo
-		endBatch := (i + 1) * batchesPerGo
-		if endBatch > B {
-			endBatch = B
-		}
-		if startBatch >= endBatch {
-			continue
-		}
+	// 4D Conv2D case
+	if len(aShape) == 4 && len(bShape) == 1 && aShape[1] == bShape[0] {
+		B, C, H, W := aShape[0], aShape[1], aShape[2], aShape[3]
+		numGoroutines := runtime.NumCPU()
+		var wg sync.WaitGroup
+		batchesPerGo := (B + numGoroutines - 1) / numGoroutines
+		for i := 0; i < numGoroutines; i++ {
+			startBatch := i * batchesPerGo
+			endBatch := (i + 1) * batchesPerGo
+			if endBatch > B {
+				endBatch = B
+			}
+			if startBatch >= endBatch {
+				continue
+			}
 
-		wg.Add(1)
-		go func(sB, eB int) {
-			defer wg.Done()
-			for b_idx := sB; b_idx < eB; b_idx++ {
-				for c_idx := 0; c_idx < C; c_idx++ {
-					biasVal := bData[c_idx]
-					offset := b_idx*(C*H*W) + c_idx*(H*W)
-					for i := 0; i < H*W; i++ {
-						idx := offset + i
-						outData[idx] = aData[idx] + biasVal
+			wg.Add(1)
+			go func(sB, eB int) {
+				defer wg.Done()
+				for b_idx := sB; b_idx < eB; b_idx++ {
+					for c_idx := 0; c_idx < C; c_idx++ {
+						biasVal := bData[c_idx]
+						offset := b_idx*(C*H*W) + c_idx*(H*W)
+						for i := 0; i < H*W; i++ {
+							idx := offset + i
+							outData[idx] = aData[idx] + biasVal
+						}
 					}
 				}
+			}(startBatch, endBatch)
+		}
+		wg.Wait()
+
+		// 2D Linear layer case
+	} else if len(aShape) == 2 && len(bShape) == 1 && aShape[1] == bShape[0] {
+		B, F := aShape[0], aShape[1]
+		numGoroutines := runtime.NumCPU()
+		var wg sync.WaitGroup
+		rowsPerGo := (B + numGoroutines - 1) / numGoroutines
+		for i := 0; i < numGoroutines; i++ {
+			startRow := i * rowsPerGo
+			endRow := (i + 1) * rowsPerGo
+			if endRow > B {
+				endRow = B
 			}
-		}(startBatch, endBatch)
+			if startRow >= endRow {
+				continue
+			}
+
+			wg.Add(1)
+			go func(sR, eR int) {
+				defer wg.Done()
+				for r := sR; r < eR; r++ {
+					offset := r * F
+					for c := 0; c < F; c++ {
+						outData[offset+c] = aData[offset+c] + bData[c]
+					}
+				}
+			}(startRow, endRow) 
+		}
+		wg.Wait()
+	} else {
+		return nil, fmt.Errorf("unsupported broadcast: a=%v, b=%v. Only 4D+1D and 2D+1D supported", aShape, bShape)
 	}
-	wg.Wait()
-	
+
 	out, err := NewTensor(aShape, outData)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	if a.RequiresGrad || b.RequiresGrad {
 		out.RequiresGrad = true
@@ -711,26 +796,43 @@ func AddTensorBroadcast(a *Tensor, b *Tensor) (*Tensor, error) {
 		out.Operation = "add_broadcast"
 		out.BackwardFunc = func(grad *Tensor) {
 			if a.RequiresGrad {
-				a.Backward(grad) 
+				a.Backward(grad) // For a, grad flows straight through
 			}
 			if b.RequiresGrad {
+				if b.Grad == nil {
+					b.ZeroGrad()
+				}
 				gradData := grad.GetData()
-				gradForBData := make([]float64, C)
-				for i := 0; i < B; i++ {
-					for j := 0; j < C; j++ {
-						for k := 0; k < H*W; k++ {
-							gradForBData[j] += gradData[i*(C*H*W) + j*(H*W) + k]
+				bGradData := b.Grad.GetData()
+
+				// Sum gradients across the broadcasted dimension(s)
+				if len(aShape) == 4 { // 4D case
+					B, C, H, W := aShape[0], aShape[1], aShape[2], aShape[3]
+					for i := 0; i < B; i++ {
+						for j := 0; j < C; j++ {
+							offset := i*(C*H*W) + j*(H*W)
+							sum := 0.0
+							for k := 0; k < H*W; k++ {
+								sum += gradData[offset+k]
+							}
+							bGradData[j] += sum
 						}
 					}
+				} else if len(aShape) == 2 { // 2D case
+					B, F := aShape[0], aShape[1]
+					for c := 0; c < F; c++ {
+						sum := 0.0
+						for r := 0; r < B; r++ {
+							sum += gradData[r*F+c]
+						}
+						bGradData[c] += sum
+					}
 				}
-				gradForB, _ := NewTensor(bShape, gradForBData)
-				b.Backward(gradForB)
 			}
 		}
 	}
 	return out, nil
 }
-
 
 // prints the tensor in readable format
 func PrintTensor(t *Tensor) {

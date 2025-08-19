@@ -101,33 +101,54 @@ func Col2Im(cols *Tensor, inputShape []int, kernelHeight, kernelWidth, stride, p
 	colsData := cols.GetData()
 	colsShape := cols.GetShape()
 
-	// Parallelizing this loop is complex because the `+=` on imgData is a race condition.
-	// A safe parallel version would require atomic operations or a parallel reduction,
-	// for now, a simple no-atomic implementation is written.
+	numGoroutines := runtime.NumCPU()
+	var wg sync.WaitGroup
+	
+	totalJobs := batchSize * channels
+	jobsPerGo := (totalJobs + numGoroutines - 1) / numGoroutines
 
-	for b := 0; b < batchSize; b++ {
-		for c := 0; c < channels; c++ {
-			for kh := 0; kh < kernelHeight; kh++ {
-				for kw := 0; kw < kernelWidth; kw++ {
-					inputRowStart := kh - padding
-					inputColStart := kw - padding
-					for oh := 0; oh < outHeight; oh++ {
-						for ow := 0; ow < outWidth; ow++ {
-							inputRow := inputRowStart + oh*stride
-							inputCol := inputColStart + ow*stride
-							if inputRow >= 0 && inputRow < height && inputCol >= 0 && inputCol < width {
-								colRow := c*(kernelHeight*kernelWidth) + kh*kernelWidth + kw
-								colCol := b*outHeight*outWidth + oh*outWidth + ow
-								srcIndex := colRow*colsShape[1] + colCol
-								destIndex := b*(channels*height*width) + c*(height*width) + inputRow*width + inputCol
-								imgData[destIndex] += colsData[srcIndex]
+	for i := 0; i < numGoroutines; i++ {
+		startJob := i * jobsPerGo
+		endJob := startJob + jobsPerGo
+		if endJob > totalJobs {
+			endJob = totalJobs
+		}
+
+		if startJob >= endJob {
+			continue
+		}
+
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			for job := start; job < end; job++ {
+				b := job / channels
+				c := job % channels
+				// The inner loops are now executed within a safe parallel context,
+				// as each goroutine works on a different batch/channel combo.
+				for kh := 0; kh < kernelHeight; kh++ {
+					for kw := 0; kw < kernelWidth; kw++ {
+						inputRowStart := kh - padding
+						inputColStart := kw - padding
+						for oh := 0; oh < outHeight; oh++ {
+							for ow := 0; ow < outWidth; ow++ {
+								inputRow := inputRowStart + oh*stride
+								inputCol := inputColStart + ow*stride
+								if inputRow >= 0 && inputRow < height && inputCol >= 0 && inputCol < width {
+									colRow := c*(kernelHeight*kernelWidth) + kh*kernelWidth + kw
+									colCol := b*outHeight*outWidth + oh*outWidth + ow
+									srcIndex := colRow*colsShape[1] + colCol
+									destIndex := b*(channels*height*width) + c*(height*width) + inputRow*width + inputCol
+									imgData[destIndex] += colsData[srcIndex]
+								}
 							}
 						}
 					}
 				}
 			}
-		}
+		}(startJob, endJob)
 	}
+	wg.Wait()
 
 	imgTensor, err := NewTensor(inputShape, imgData)
 	if err != nil {

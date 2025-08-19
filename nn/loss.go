@@ -2,8 +2,10 @@ package nn
 
 import (
 	"fmt"
-	"math"
 	"go-torch/tensor"
+	"math"
+	"runtime" 
+	"sync"    
 )
 
 
@@ -107,44 +109,46 @@ func CrossEntropyLoss(logits *tensor.Tensor, targets []int) (*tensor.Tensor, err
 	// called during back-propog if lossTensor requires grad
 	if lossTensor.RequiresGrad {
 		lossTensor.BackwardFunc = func(grad *tensor.Tensor) {
-			// 'grad' is dL_total/dL_this, where L_this is the mean loss here.
-			// for the final loss node, 'grad' is 1.0.
-			// in this Softmax+CrossEntropy gradient, the 'grad' value isn't used directly,
-			// but would scale dL/d(logits) if part of a larger graph. For a final node, scaling is 1.
-
 			if logits.RequiresGrad {
-				// gradient of mean loss with respect to logits is (y - target_one_hot) / batchSize.
-				gradDataForLogits := make([]float64, logitsSize) 
+				gradDataForLogits := make([]float64, logitsSize)
+				scale := 1.0 / float64(batchSize) // Pre-calculate scale
 
-				// compute gradient (probs - target_one_hot) per batch item
-				for i := 0; i < batchSize; i++ {
-					startIdx := i * numClasses
-					targetIndex := targets[i]
+				// Parallelize the gradient calculation across the batch
+				numGoroutines := runtime.NumCPU()
+				jobsPerGo := (batchSize + numGoroutines - 1) / numGoroutines
+				var wg sync.WaitGroup
 
-					// The gradient for batch item 'i' is probs_i - target_one_hot_i
-					// if confused, target_one_hot_i is a vector with 1 at targetIndex and 0 elsewhere.
-					for j := 0; j < numClasses; j++ {
-						gradDataForLogits[startIdx+j] = probsData[startIdx+j]
-						if j == targetIndex {
-							gradDataForLogits[startIdx+j] -= 1.0 
+				for i := 0; i < numGoroutines; i++ {
+					startBatch, endBatch := i*jobsPerGo, (i+1)*jobsPerGo
+					if endBatch > batchSize { endBatch = batchSize }
+					if startBatch >= endBatch { continue }
+
+					wg.Add(1)
+					go func(sB, eB int) {
+						defer wg.Done()
+						for item := sB; item < eB; item++ {
+							startIdx := item * numClasses
+							targetIndex := targets[item]
+
+							for j := 0; j < numClasses; j++ {
+								gradVal := probsData[startIdx+j]
+								if j == targetIndex {
+									gradVal -= 1.0
+								}
+								gradDataForLogits[startIdx+j] = gradVal * scale
+							}
 						}
-					}
+					}(startBatch, endBatch)
 				}
+				wg.Wait()
 
-				// scale the gradient by 1/batchSize 
-				scale := 1.0 / float64(batchSize)
-				for i := range gradDataForLogits {
-					gradDataForLogits[i] *= scale
-				}
-
-				// gradient tensor must have the same shape as the parent (logits), else err.
-				gradTensorForLogits, err := tensor.NewTensor(logits.GetShape(), gradDataForLogits)
+				gradTensorForLogits, err := tensor.NewTensor(logits.GetShape(), gradDataForLogits) 
 				if err != nil {
 					fmt.Printf("Warning: Failed to create gradient tensor for logits in CrossEntropyLoss backward: %v\n", err)
-					return 
+					return
 				}
 
-				// Call backward on the parent (logits) with the computed gradient tensor
+				// Call backward on the parent (logits) to accumulate the gradient
 				logits.Backward(gradTensorForLogits)
 			}
 		}

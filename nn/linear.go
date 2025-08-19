@@ -62,14 +62,13 @@ func NewLinear(inputDimensions, outputDimensions int) (*Linear, error) {
 func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	inputShape := input.GetShape()
 	if len(inputShape) != 2 {
-		// early return, invalid shape.
 		return nil, fmt.Errorf("linear layer expects 2D input tensor [batch_size, input_dimensions], got shape %v", inputShape)
 	}
-	batchSize := inputShape[0]
+	// batchSize := inputShape[0] // No longer needed for bias
 	inputDims := inputShape[1]
 
 	weightShape := l.weight.GetShape()
-	weightInputDims := weightShape[0] 
+	weightInputDims := weightShape[0]
 	outputDims := weightShape[1]
 
 	if inputDims != weightInputDims {
@@ -81,9 +80,6 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("linear layer bias dimension mismatch: bias shape %v, expected [%d]", biasShape, outputDims)
 	}
 
-
-	// --- Matrix Multiplication ---
-	// perform input @ weight
 	// input: [batch_size, input_dimensions]
 	// weight: [input_dimensions, output_dimensions]
 	// result (step): [batch_size, output_dimensions]
@@ -92,46 +88,13 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("linear layer matmul failed: %w", err)
 	}
 
-	// --- Bias Addition ---
-	// add bias to the result of matmul.
-	// step shape: [batch_size, output_dimensions]
-	// bias shape: [output_dimensions]
-	// We need to broadcast bias to match step shape for element-wise addition.
-	// TODO: i implemented a broadcastedBiasData: which is inefficient. consider changing. 
-	broadcastedBiasData := make([]float64, tensor.Numel(step))
-	biasData := l.bias.GetData()
-	outputNumel := outputDims 
-
-	for i := 0; i < batchSize; i++ {
-		startIdx := i * outputNumel
-		copy(broadcastedBiasData[startIdx:startIdx+outputNumel], biasData)
-	}
-
-	// Create a tensor for the broadcasted bias
-	broadcastedBiasTensor, err := tensor.NewTensor(step.GetShape(), broadcastedBiasData)
-	if err != nil {
-         return nil, fmt.Errorf("linear layer failed to create broadcasted bias tensor: %w", err)
-    }
-    // The broadcasted bias tensor should inherit RequiresGrad from the original bias
-    // This is crucial for gradient flow to the bias parameter
-    broadcastedBiasTensor.RequiresGrad = l.bias.RequiresGrad
-    broadcastedBiasTensor.Parents = []*tensor.Tensor{l.bias} 
-    broadcastedBiasTensor.Operation = "broadcast_bias" 
-
-
-	// add the broadcasted bias
-	output, err := tensor.AddTensor(step, broadcastedBiasTensor)
+	output, err := tensor.AddTensorBroadcast(step, l.bias)
 	if err != nil {
 		return nil, fmt.Errorf("linear layer bias addition failed: %w", err)
 	}
 
-    // The output tensor's RequiresGrad, Parents, and BackwardFunc are automatically
-    // set by the AddTensor operation based on its parents (step and broadcastedBiasTensor),
-    // which in turn link back to the original input, weights, and bias.
-
 	return output, nil
 }
-
 
 
 // Parameters() returns the list of parameters in the layer that require gradients. i feed this for optimizers.
