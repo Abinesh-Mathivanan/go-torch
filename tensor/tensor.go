@@ -834,6 +834,49 @@ func AddTensorBroadcast(a *Tensor, b *Tensor) (*Tensor, error) {
 	return out, nil
 }
 
+
+// returns the index of the maximum value in a tensor.
+// effectively flattens the tensor before finding the index.
+func ArgMax(t *Tensor) int {
+	data := t.GetData()
+	if len(data) == 0 {
+		return -1 
+	}
+	maxIdx := 0
+	maxVal := data[0]
+	for i := 1; i < len(data); i++ {
+		if data[i] > maxVal {
+			maxVal = data[i]
+			maxIdx = i
+		}
+	}
+	return maxIdx
+}
+
+
+// extracts a single item from a 4D tensor along the batch dimension (axis 0).
+func (t *Tensor) Slice(index int) (*Tensor, error) {
+	shape := t.GetShape() // Expects [B, C, H, W]
+	if len(shape) != 4 {
+		return nil, fmt.Errorf("slice is only supported for 4D tensors, got %dD", len(shape))
+	}
+	B, C, H, W := shape[0], shape[1], shape[2], shape[3]
+	if index < 0 || index >= B {
+		return nil, fmt.Errorf("slice index %d out of bounds for batch size %d", index, B)
+	}
+	
+	newShape := []int{1, C, H, W}
+	numelPerItem := C * H * W
+	start := index * numelPerItem
+	end := start + numelPerItem
+	
+	newData := make([]float64, numelPerItem)
+	copy(newData, t.data[start:end])
+	
+	return NewTensor(newShape, newData)
+}
+
+
 // prints the tensor in readable format
 func PrintTensor(t *Tensor) {
 	if t == nil {
