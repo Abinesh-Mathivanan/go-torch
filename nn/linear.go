@@ -120,3 +120,7 @@ func (l *Linear) ZeroGrad() {
         l.bias.ZeroGrad()
      }
 }
+
+func (l *Linear) Name() string {
+	return "Linear"
+}

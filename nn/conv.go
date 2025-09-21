@@ -118,3 +118,7 @@ func (c *Conv2D) ZeroGrad() {
 	c.Weight.ZeroGrad()
 	c.Bias.ZeroGrad()
 }
+
+func (c *Conv2D) Name() string {
+	return "Conv2D"
+}

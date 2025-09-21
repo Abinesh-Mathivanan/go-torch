@@ -23,3 +23,7 @@ func (f *Flatten) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 
 func (f *Flatten) Parameters() []*tensor.Tensor { return []*tensor.Tensor{} }
 func (f *Flatten) ZeroGrad() {}
+
+func (f *Flatten) Name() string {
+	return "Flatten"
+}

@@ -110,3 +110,7 @@ func (p *MaxPooling2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 // we don't need to zero out any grad, since MaxPooling doesn't need any learnable parameters 
 func (p *MaxPooling2D) Parameters() []*tensor.Tensor { return []*tensor.Tensor{} }
 func (p *MaxPooling2D) ZeroGrad() {}
+
+func (p *MaxPooling2D) Name() string {
+	return "MaxPooling2D"
+}
