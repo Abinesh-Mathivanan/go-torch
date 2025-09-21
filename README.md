@@ -1,22 +1,58 @@
 # go-torch 
 
-i built a simple pytorch implementation in go. till now, we support the basic linear layer support and you could perform a 'mnist character prediction' with the current setup. 
-
-i aim to improve this to match torch's performance. 
+go-torch is an open-source deep learning framework built from the ground up in pure Go. It provides a modular, PyTorch-like API for building and training neural networks with a stable auto-differentiation engine.
 
 blog - https://abinesh-mathivanan.vercel.app/en/posts/post-5/
+
+
+## features 
+- **dynamic computation graph**: tensors track their history, allowing for automatic gradient calculation during the backward pass.
+- extensible module system (nn.Layer, nn.Sequential): build complex model architectures with a flexible, Keras-like sequential API. 
+- layer and function library: includes Conv2D, Linear, MaxPooling2D, Flatten, ReLU, CrossEntropyLoss, and SGD
+- **real-time TUI dashboard**: live graphs for batch-wise loss and epoch-wise validation accuracy, monitoring of memory usage (Heap/Total Alloc), GC cycles, and active goroutines along with keras-like summary.
+- optimized performance: using BLAS, go-routines and topological autograd + grad accumulation
+
+<br/>
+
+**TUI Dashboard**
+
+![alt text](dashboard.png)
+
 
 <br>
 
 ## TODO
-- [ ] add support for CNN, RNN
-- [ ] optimize the Matmul with BLAS
-- [ ] support building native opencl kernels for intel
-- [ ] add gpu support 
+- [ ] add support for RNN, LSTM, Transformers
+- [ ] implement Adam with Ga-lore and LORA techniques, RMSProp etc...
+- [ ] model.load() and model.save() without gob
 - [ ] support building Transformers
 
+<br/>
 
-some todo's are written inside the files. use 'better comments' extension for best experience. 
+## pre-requisites 
+- Go 1.18 or later.
+- system-installed BLAS library is recommended for maximum performance but not required.
+- some todo's are written inside the files. use 'better comments' extension for best experience. 
+
+<br/>
+
+## usage 
+
+### clone the repository
+```bash
+git clone https://github.com/abinesh-mathivanan/go-torch.git
+cd go-torch
+``` 
+### install dependencies 
+``` bash
+go mod tidy
+```
+
+### execute 
+run the mnist training file to test out the features. 
+```bash
+go run ./cnn_benchmark/go_bench.go
+```
 
 <br>
 
