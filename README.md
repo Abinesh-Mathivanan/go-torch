@@ -2,6 +2,7 @@
 
 go-torch is an open-source deep learning framework built from the ground up in pure Go. It provides a modular, PyTorch-like API for building and training neural networks with a stable auto-differentiation engine.
 
+mail - abineshmathivanan31@gmail.com 
 blog - https://abinesh-mathivanan.vercel.app/en/posts/post-5/
 
 
@@ -71,4 +72,6 @@ go run ./cnn_benchmark/go_bench.go
 
 <br>
 <br>
-mail - abineshmathivanan31@gmail.com 
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Abinesh-Mathivanan/go-torch&type=Date)](https://www.star-history.com/#Abinesh-Mathivanan/go-torch&Date)
+

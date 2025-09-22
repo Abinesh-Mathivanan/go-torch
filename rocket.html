@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>3D Single-Cylinder Engine — Modern Three.js</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  body { margin:0; background:#0b0f1a; color:#e7eefc; font-family:system-ui,Arial; }
+  #ui { position: absolute; left:12px; top:12px; z-index:10; background:rgba(8,12,20,0.6);
+       padding:10px; border-radius:8px; backdrop-filter: blur(6px); }
+  label { font-size:13px; color:#bcd3ff; display:block; margin-bottom:6px; }
+  input[type=range] { width:220px; }
+  button { margin-top:8px; padding:6px 10px; border-radius:6px; border:none; background:#2b7df0; color:white; cursor:pointer; }
+  small { color:#98b7e6; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <label>RPM: <span id="rpmVal">900</span></label>
+  <input id="rpm" type="range" min="100" max="6000" step="10" value="900"/>
+  <div style="margin-top:8px;">
+    <button id="play">Start</button>
+    <button id="stop">Stop</button>
+  </div>
+  <div style="margin-top:8px;">
+    <small>Crank radius <span id="rVal">0.05</span> m — Rod length <span id="lVal">0.15</span> m</small>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
+  import { OrbitControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/OrbitControls.js';
+
+// Scene, camera, renderer
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x071026);
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.01, 10);
+camera.position.set(0.35, 0.25, 0.6);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0,0.08,0);
+controls.update();
+
+// Lights
+scene.add(new THREE.HemisphereLight(0x96b6ff, 0x102030, 0.8));
+const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+dir.position.set(0.5, 1, 0.5);
+scene.add(dir);
+
+// Parameters
+const crankRadius = 0.05; // meters
+const rodLength   = 0.15;
+const cylinderBore = 0.08;
+const crankOffset = 0.1;
+
+// Materials
+const metalMat = new THREE.MeshStandardMaterial({ color:0x9aa8b8, metalness:0.7, roughness:0.35 });
+const darkMat  = new THREE.MeshStandardMaterial({ color:0x28343f, metalness:0.5, roughness:0.6 });
+const valveMat = new THREE.MeshStandardMaterial({ color:0xa84d3a, metalness:0.5, roughness:0.4 });
+const pistonMat= new THREE.MeshStandardMaterial({ color:0xcfd6dd, metalness:0.6, roughness:0.25 });
+
+// Cylinder block & sleeve
+const block = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.12, 0.18), darkMat);
+block.position.set(0, 0.06, 0);
+scene.add(block);
+const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(cylinderBore/2 + 0.005, cylinderBore/2 + 0.005, 0.12, 32, 1, true), metalMat);
+sleeve.rotation.x = Math.PI/2;
+sleeve.position.set(0, 0.06, 0);
+scene.add(sleeve);
+
+// Piston & crown
+const piston = new THREE.Mesh(new THREE.CylinderGeometry(cylinderBore/2 * 0.98, cylinderBore/2 * 0.98, 0.04, 32), pistonMat);
+piston.rotation.x = Math.PI/2; scene.add(piston);
+const crown = new THREE.Mesh(new THREE.CylinderGeometry(cylinderBore/2 * 0.9, cylinderBore/2 * 0.9, 0.01, 24), metalMat);
+crown.rotation.x = Math.PI/2; scene.add(crown);
+
+// Connecting rod
+const rod = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.04, 0.01), metalMat);
+scene.add(rod);
+
+// Crank group & crank pin
+const crankGroup = new THREE.Group();
+crankGroup.position.set(-0.18, 0.02, 0);
+scene.add(crankGroup);
+const crankPin = new THREE.Mesh(new THREE.CylinderGeometry(0.01,0.01,0.06,16), metalMat);
+crankPin.rotation.z = Math.PI/2;
+crankPin.position.set(crankRadius, 0, 0);
+crankGroup.add(crankPin);
+const crankWeb = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.08, 0.07), darkMat);
+crankWeb.position.copy(crankGroup.position);
+scene.add(crankWeb);
+
+// Shaft
+const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.01,0.01,0.3,16), darkMat);
+shaft.rotation.z = Math.PI/2; shaft.position.set(-0.02, 0.02, 0);
+scene.add(shaft);
+
+// Valves
+const valveStemGeom = new THREE.CylinderGeometry(0.005, 0.005, 0.08, 12);
+const intakeValve = new THREE.Mesh(valveStemGeom, valveMat);
+const exhaustValve = new THREE.Mesh(valveStemGeom, valveMat);
+intakeValve.rotation.z = Math.PI/2;
+exhaustValve.rotation.z = Math.PI/2;
+intakeValve.position.set(-0.03, 0.12, 0.03);
+exhaustValve.position.set( 0.03, 0.12,-0.03);
+scene.add(intakeValve, exhaustValve);
+
+// Helper ring for crank radius
+const radiusGeom = new THREE.RingGeometry(crankRadius - 0.002, crankRadius + 0.002, 32);
+const rmesh = new THREE.Mesh(radiusGeom, new THREE.MeshBasicMaterial({color:0xffaa33}));
+rmesh.rotation.z = Math.PI/2;
+rmesh.position.copy(crankGroup.position);
+scene.add(rmesh);
+
+// Plane
+const plane = new THREE.Mesh(new THREE.PlaneGeometry(3,3), new THREE.MeshStandardMaterial({color:0x061227, side:THREE.DoubleSide}));
+plane.rotation.x = -Math.PI/2;
+plane.position.y = -0.02;
+scene.add(plane);
+
+// Kinematics
+let angle = 0; // crank angle
+let running = false;
+let lastTime = performance.now();
+let rpm = Number(document.getElementById('rpm').value);
+
+function pistonY(theta, r, l) {
+  const rsin = r * Math.sin(theta);
+  const under = l*l - rsin*rsin;
+  const rodTerm = under>0 ? Math.sqrt(under) : 0;
+  return crankOffset + r * Math.cos(theta) + rodTerm;
+}
+function valveLift(theta, phaseDeg, liftAmp, openAngleDeg) {
+  const deg = (theta * 180/Math.PI) % 360;
+  const d = (deg - phaseDeg + 360) % 360;
+  if (d < openAngleDeg) {
+    const t = d / openAngleDeg;
+    return liftAmp * Math.sin(Math.PI * t);
+  }
+  return 0;
+}
+function placeParts(theta) {
+  crankGroup.rotation.z = -theta;
+  const pinX = crankGroup.position.x + crankRadius * Math.cos(theta);
+  const pinY = crankGroup.position.y + crankRadius * Math.sin(theta);
+  const pistonCenterY = pistonY(theta, crankRadius, rodLength);
+  piston.position.set(0, pistonCenterY, 0);
+  crown.position.set(0, pistonCenterY+0.02, 0);
+  const wristX = 0;
+  const wristY = pistonCenterY - 0.005;
+  const dx = wristX - pinX;
+  const dy = wristY - pinY;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  const midX = (wristX + pinX)/2;
+  const midY = (wristY + pinY)/2;
+  rod.position.set(midX, midY, 0);
+  rod.scale.set(1, dist/0.04, 1);
+  rod.rotation.z = Math.atan2(dy, dx) - Math.PI/2;
+  const liftInt = valveLift(theta, 350, 0.012, 120);
+  const liftEx  = valveLift(theta, 170, 0.010, 120);
+  intakeValve.position.y = 0.12 + liftInt;
+  exhaustValve.position.y = 0.12 + liftEx;
+}
+placeParts(angle);
+
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = (now - lastTime)/1000;
+  lastTime = now;
+  if (running) {
+    const omega = (rpm/60) * 2*Math.PI;
+    angle += omega * dt;
+    angle %= 2*Math.PI;
+    placeParts(angle);
+  }
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+
+// UI
+document.getElementById('rpm').addEventListener('input', (e)=>{
+  rpm = Number(e.target.value);
+  document.getElementById('rpmVal').textContent = rpm;
+});
+document.getElementById('play').addEventListener('click', ()=>{ running=true; lastTime=performance.now(); });
+document.getElementById('stop').addEventListener('click', ()=>{ running=false; });
+document.getElementById('rVal').textContent = crankRadius.toFixed(2);
+document.getElementById('lVal').textContent = rodLength.toFixed(2);
+
+window.addEventListener('resize', ()=>{
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+});
+</script>
+</body>
+</html>
