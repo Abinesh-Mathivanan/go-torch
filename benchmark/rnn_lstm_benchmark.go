@@ -16,24 +16,24 @@ import (
 
 // BenchmarkConfig holds configuration for RNN/LSTM benchmarks
 type BenchmarkConfig struct {
-	BatchSize    int
-	SeqLength    int
-	InputSize    int
-	HiddenSize   int
-	Iterations   int
-	ReturnSeq    bool
+	BatchSize  int
+	SeqLength  int
+	InputSize  int
+	HiddenSize int
+	Iterations int
+	ReturnSeq  bool
 }
 
 // BenchmarkResult holds the results of a benchmark run
 type BenchmarkResult struct {
-	Config          BenchmarkConfig
-	ForwardTime     time.Duration
-	BackwardTime    time.Duration
-	TotalTime       time.Duration
-	MemoryBefore    uint64
-	MemoryAfter     uint64
-	MemoryDelta     uint64
-	ParameterCount  int
+	Config         BenchmarkConfig
+	ForwardTime    time.Duration
+	BackwardTime   time.Duration
+	TotalTime      time.Duration
+	MemoryBefore   uint64
+	MemoryAfter    uint64
+	MemoryDelta    uint64
+	ParameterCount int
 }
 
 // Standard benchmark configurations
@@ -42,11 +42,11 @@ var benchmarkConfigs = []BenchmarkConfig{
 	{BatchSize: 1, SeqLength: 10, InputSize: 32, HiddenSize: 64, Iterations: 100, ReturnSeq: false},
 	{BatchSize: 8, SeqLength: 20, InputSize: 32, HiddenSize: 64, Iterations: 50, ReturnSeq: false},
 	{BatchSize: 16, SeqLength: 50, InputSize: 64, HiddenSize: 128, Iterations: 20, ReturnSeq: false},
-	
+
 	// Medium configurations
 	{BatchSize: 32, SeqLength: 100, InputSize: 128, HiddenSize: 256, Iterations: 10, ReturnSeq: false},
 	{BatchSize: 16, SeqLength: 200, InputSize: 256, HiddenSize: 512, Iterations: 5, ReturnSeq: false},
-	
+
 	// Return sequence configurations
 	{BatchSize: 8, SeqLength: 20, InputSize: 32, HiddenSize: 64, Iterations: 20, ReturnSeq: true},
 	{BatchSize: 16, SeqLength: 50, InputSize: 64, HiddenSize: 128, Iterations: 10, ReturnSeq: true},
@@ -106,7 +106,7 @@ func benchmarkRNNForward(config BenchmarkConfig) (time.Duration, int, error) {
 
 	avgDuration := totalDuration / time.Duration(config.Iterations)
 	paramCount := len(rnn.Parameters())
-	
+
 	return avgDuration, paramCount, nil
 }
 
@@ -146,14 +146,14 @@ func benchmarkLSTMForward(config BenchmarkConfig) (time.Duration, int, error) {
 
 	avgDuration := totalDuration / time.Duration(config.Iterations)
 	paramCount := len(lstm.Parameters())
-	
+
 	return avgDuration, paramCount, nil
 }
 
 // benchmarkRNNForwardBackward tests RNN forward + backward pass performance
 func benchmarkRNNForwardBackward(config BenchmarkConfig) BenchmarkResult {
 	result := BenchmarkResult{Config: config}
-	
+
 	// Record initial memory
 	result.MemoryBefore = getMemoryUsage()
 
@@ -201,7 +201,7 @@ func benchmarkRNNForwardBackward(config BenchmarkConfig) BenchmarkResult {
 
 		// Forward pass timing
 		forwardStart := time.Now()
-		
+
 		rnnOutput, err := rnn.Forward(input)
 		if err != nil {
 			log.Fatalf("RNN forward failed: %v", err)
@@ -216,7 +216,7 @@ func benchmarkRNNForwardBackward(config BenchmarkConfig) BenchmarkResult {
 		if err != nil {
 			log.Fatalf("Loss computation failed: %v", err)
 		}
-		
+
 		forwardTime := time.Since(forwardStart)
 		totalForwardTime += forwardTime
 
@@ -244,7 +244,7 @@ func benchmarkRNNForwardBackward(config BenchmarkConfig) BenchmarkResult {
 // benchmarkLSTMForwardBackward tests LSTM forward + backward pass performance
 func benchmarkLSTMForwardBackward(config BenchmarkConfig) BenchmarkResult {
 	result := BenchmarkResult{Config: config}
-	
+
 	// Record initial memory
 	result.MemoryBefore = getMemoryUsage()
 
@@ -292,7 +292,7 @@ func benchmarkLSTMForwardBackward(config BenchmarkConfig) BenchmarkResult {
 
 		// Forward pass timing
 		forwardStart := time.Now()
-		
+
 		lstmOutput, err := lstm.Forward(input)
 		if err != nil {
 			log.Fatalf("LSTM forward failed: %v", err)
@@ -307,7 +307,7 @@ func benchmarkLSTMForwardBackward(config BenchmarkConfig) BenchmarkResult {
 		if err != nil {
 			log.Fatalf("Loss computation failed: %v", err)
 		}
-		
+
 		forwardTime := time.Since(forwardStart)
 		totalForwardTime += forwardTime
 
@@ -390,16 +390,14 @@ func runForwardOnlyBenchmarks() {
 	}
 }
 
-
-
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	
+
 	fmt.Println("=== Go-Torch RNN/LSTM Comprehensive Benchmark ===")
 	fmt.Printf("Go version: %s\n", runtime.Version())
 	fmt.Printf("GOMAXPROCS: %d\n", runtime.GOMAXPROCS(0))
 	fmt.Printf("Start time: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-	
+
 	// Run forward-only benchmarks first
 	runForwardOnlyBenchmarks()
 
@@ -409,13 +407,13 @@ func main() {
 
 	for _, config := range benchmarkConfigs {
 		// RNN benchmark
-		fmt.Printf("Running RNN benchmark: Batch=%d, Seq=%d, Hidden=%d...\n", 
+		fmt.Printf("Running RNN benchmark: Batch=%d, Seq=%d, Hidden=%d...\n",
 			config.BatchSize, config.SeqLength, config.HiddenSize)
 		rnnResult := benchmarkRNNForwardBackward(config)
 		printBenchmarkResult("RNN", rnnResult)
 
 		// LSTM benchmark
-		fmt.Printf("Running LSTM benchmark: Batch=%d, Seq=%d, Hidden=%d...\n", 
+		fmt.Printf("Running LSTM benchmark: Batch=%d, Seq=%d, Hidden=%d...\n",
 			config.BatchSize, config.SeqLength, config.HiddenSize)
 		lstmResult := benchmarkLSTMForwardBackward(config)
 		printBenchmarkResult("LSTM", lstmResult)

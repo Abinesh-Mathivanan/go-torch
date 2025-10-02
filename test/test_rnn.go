@@ -13,7 +13,7 @@ import (
 
 func testBasicRNN() {
 	fmt.Println("=== Testing Basic RNN ===")
-	
+
 	// Create simple RNN: input_size=3, hidden_size=4, return_sequence=false
 	rnn, err := nn.NewRNN(3, 4, 1, false)
 	if err != nil {
@@ -56,7 +56,7 @@ func testBasicRNN() {
 
 func testBasicLSTM() {
 	fmt.Println("\n=== Testing Basic LSTM ===")
-	
+
 	// Create simple LSTM: input_size=3, hidden_size=4, return_sequence=true
 	lstm, err := nn.NewLSTM(3, 4, 1, true)
 	if err != nil {
@@ -91,7 +91,7 @@ func testBasicLSTM() {
 
 func testRNNGradients() {
 	fmt.Println("\n=== Testing RNN with Gradients ===")
-	
+
 	// Create RNN for classification task
 	rnn, err := nn.NewRNN(2, 3, 1, false) // Last timestep only
 	if err != nil {
@@ -107,7 +107,7 @@ func testRNNGradients() {
 	// Create input sequence: [batch_size=1, seq_length=3, input_size=2]
 	inputData := []float64{
 		0.5, -0.2, // timestep 1
-		0.3, 0.1,  // timestep 2
+		0.3, 0.1, // timestep 2
 		-0.1, 0.7, // timestep 3
 	}
 
@@ -144,7 +144,7 @@ func testRNNGradients() {
 	// Check if gradients were computed
 	rnnParams := rnn.Parameters()
 	classifierParams := classifier.Parameters()
-	
+
 	fmt.Printf("RNN parameter gradients computed: ")
 	for i, param := range rnnParams {
 		if param.Grad != nil {
@@ -182,13 +182,13 @@ func testRNNGradients() {
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	
+
 	fmt.Println("Go-Torch RNN/LSTM Test Suite")
 	fmt.Println("===============================")
-	
+
 	testBasicRNN()
 	testBasicLSTM()
 	testRNNGradients()
-	
+
 	fmt.Println("\n=== All RNN/LSTM tests completed! ===")
 }
