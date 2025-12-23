@@ -26,12 +26,12 @@ func NewRNNCell(inputSize, hiddenSize int) (*RNNCell, error) {
 	
 	// Xavier initialization for better gradient flow
 	// stddev = sqrt(2.0 / (input_size + hidden_size))
-	stddev := 0.1 // Starting with simple initialization, can improve later
+	stddev := float32(0.1) // Starting with simple initialization, can improve later
 	
 	// Initialize Wxh weights
-	wxhData := make([]float64, inputSize*hiddenSize)
+	wxhData := make([]float32, inputSize*hiddenSize)
 	for i := range wxhData {
-		wxhData[i] = (2*random.Float64() - 1) * stddev
+		wxhData[i] = (2*random.Float32() - 1) * stddev
 	}
 	wxh, err := tensor.NewTensor([]int{inputSize, hiddenSize}, wxhData)
 	if err != nil {
@@ -40,9 +40,9 @@ func NewRNNCell(inputSize, hiddenSize int) (*RNNCell, error) {
 	wxh.RequiresGrad = true
 
 	// Initialize Whh weights
-	whhData := make([]float64, hiddenSize*hiddenSize)
+	whhData := make([]float32, hiddenSize*hiddenSize)
 	for i := range whhData {
-		whhData[i] = (2*random.Float64() - 1) * stddev
+		whhData[i] = (2*random.Float32() - 1) * stddev
 	}
 	whh, err := tensor.NewTensor([]int{hiddenSize, hiddenSize}, whhData)
 	if err != nil {
@@ -51,7 +51,7 @@ func NewRNNCell(inputSize, hiddenSize int) (*RNNCell, error) {
 	whh.RequiresGrad = true
 
 	// Initialize bias to zero
-	biasData := make([]float64, hiddenSize)
+	biasData := make([]float32, hiddenSize)
 	bias, err := tensor.NewTensor([]int{hiddenSize}, biasData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bias tensor: %w", err)
@@ -192,7 +192,7 @@ func (rnn *RNN) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	}
 
 	// Initialize hidden state to zeros
-	hiddenData := make([]float64, batchSize*rnn.hiddenSize)
+	hiddenData := make([]float32, batchSize*rnn.hiddenSize)
 	hidden, err := tensor.NewTensor([]int{batchSize, rnn.hiddenSize}, hiddenData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create initial hidden state: %w", err)
@@ -204,7 +204,7 @@ func (rnn *RNN) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	// Process each timestep
 	for t := 0; t < seqLength; t++ {
 		// Extract input for current timestep
-		timestepData := make([]float64, batchSize*inputSize)
+		timestepData := make([]float32, batchSize*inputSize)
 		for b := 0; b < batchSize; b++ {
 			srcStart := b*seqLength*inputSize + t*inputSize
 			dstStart := b * inputSize
@@ -229,7 +229,7 @@ func (rnn *RNN) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 
 	if rnn.returnSeq {
 		// Stack outputs to create [batch_size, seq_length, hidden_size]
-		outputData := make([]float64, batchSize*seqLength*rnn.hiddenSize)
+		outputData := make([]float32, batchSize*seqLength*rnn.hiddenSize)
 		for t, output := range outputs {
 			outputSlice := output.GetData()
 			for b := 0; b < batchSize; b++ {
@@ -299,13 +299,13 @@ func NewLSTMCell(inputSize, hiddenSize int) (*LSTMCell, error) {
 	
 	// Combined input size (input + hidden)
 	combinedSize := inputSize + hiddenSize
-	stddev := 0.1 // Starting with simple initialization
+	stddev := float32(0.1) // Starting with simple initialization
 	
 	// Create weight matrices for all gates
 	createWeights := func() (*tensor.Tensor, error) {
-		data := make([]float64, combinedSize*hiddenSize)
+		data := make([]float32, combinedSize*hiddenSize)
 		for i := range data {
-			data[i] = (2*random.Float64() - 1) * stddev
+			data[i] = (2*random.Float32() - 1) * stddev
 		}
 		w, err := tensor.NewTensor([]int{combinedSize, hiddenSize}, data)
 		if err != nil {
@@ -317,7 +317,7 @@ func NewLSTMCell(inputSize, hiddenSize int) (*LSTMCell, error) {
 
 	// Create bias vectors for all gates
 	createBias := func() (*tensor.Tensor, error) {
-		data := make([]float64, hiddenSize)
+		data := make([]float32, hiddenSize)
 		// Initialize forget gate bias to 1.0 for better gradient flow
 		b, err := tensor.NewTensor([]int{hiddenSize}, data)
 		if err != nil {
@@ -385,7 +385,7 @@ func (lstm *LSTMCell) Forward(input, hidden, cellState *tensor.Tensor) (*tensor.
 	// Concatenate input and hidden: [batch_size, input_size + hidden_size]
 	inputData := input.GetData()
 	hiddenData := hidden.GetData()
-	combinedData := make([]float64, batchSize*(lstm.inputSize+lstm.hiddenSize))
+	combinedData := make([]float32, batchSize*(lstm.inputSize+lstm.hiddenSize))
 	
 	for b := 0; b < batchSize; b++ {
 		// Copy input
@@ -525,13 +525,13 @@ func (lstm *LSTM) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	}
 
 	// Initialize hidden state and cell state to zeros
-	hiddenData := make([]float64, batchSize*lstm.hiddenSize)
+	hiddenData := make([]float32, batchSize*lstm.hiddenSize)
 	hidden, err := tensor.NewTensor([]int{batchSize, lstm.hiddenSize}, hiddenData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create initial hidden state: %w", err)
 	}
 
-	cellData := make([]float64, batchSize*lstm.hiddenSize)
+	cellData := make([]float32, batchSize*lstm.hiddenSize)
 	cellState, err := tensor.NewTensor([]int{batchSize, lstm.hiddenSize}, cellData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create initial cell state: %w", err)
@@ -543,7 +543,7 @@ func (lstm *LSTM) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	// Process each timestep
 	for t := 0; t < seqLength; t++ {
 		// Extract input for current timestep
-		timestepData := make([]float64, batchSize*inputSize)
+		timestepData := make([]float32, batchSize*inputSize)
 		for b := 0; b < batchSize; b++ {
 			srcStart := b*seqLength*inputSize + t*inputSize
 			dstStart := b * inputSize
@@ -568,7 +568,7 @@ func (lstm *LSTM) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 
 	if lstm.returnSeq {
 		// Stack outputs to create [batch_size, seq_length, hidden_size]
-		outputData := make([]float64, batchSize*seqLength*lstm.hiddenSize)
+		outputData := make([]float32, batchSize*seqLength*lstm.hiddenSize)
 		for t, output := range outputs {
 			outputSlice := output.GetData()
 			for b := 0; b < batchSize; b++ {

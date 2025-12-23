@@ -6,23 +6,21 @@ import (
 	"math"
 )
 
-
 // implements the Adam optimization algorithm.
 type Adam struct {
-	learningRate float64
-	beta1        float64
-	beta2        float64
-	epsilon      float64
+	learningRate float32
+	beta1        float32
+	beta2        float32
+	epsilon      float32
 	parameters   []*tensor.Tensor
-	m            map[*tensor.Tensor][]float64 // 1st moment vector (mean)
-	v            map[*tensor.Tensor][]float64 // 2nd moment vector (uncentered variance)
-	t            int                          // timestep 
+	m            map[*tensor.Tensor][]float32 // 1st moment vector (mean)
+	v            map[*tensor.Tensor][]float32 // 2nd moment vector (uncentered variance)
+	t            int                          // timestep
 }
-
 
 // creates a new Adam optimizer.
 // Common default values are lr=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8.
-func NewAdam(parameters []*tensor.Tensor, learningRate, beta1, beta2, epsilon float64) (*Adam, error) {
+func NewAdam(parameters []*tensor.Tensor, learningRate, beta1, beta2, epsilon float32) (*Adam, error) {
 	if learningRate <= 0.0 {
 		return nil, fmt.Errorf("optimizer: Adam learning rate must be positive")
 	}
@@ -46,13 +44,13 @@ func NewAdam(parameters []*tensor.Tensor, learningRate, beta1, beta2, epsilon fl
 		return nil, fmt.Errorf("optimizer: no parameters requiring gradients provided")
 	}
 
-	m := make(map[*tensor.Tensor][]float64)
-	v := make(map[*tensor.Tensor][]float64)
+	m := make(map[*tensor.Tensor][]float32)
+	v := make(map[*tensor.Tensor][]float32)
 
 	// pre-allocate buffers for the moment vectors for each valid parameter.
 	for _, p := range validParams {
-		m[p] = make([]float64, tensor.Numel(p))
-		v[p] = make([]float64, tensor.Numel(p))
+		m[p] = make([]float32, tensor.Numel(p))
+		v[p] = make([]float32, tensor.Numel(p))
 	}
 
 	return &Adam{
@@ -67,15 +65,14 @@ func NewAdam(parameters []*tensor.Tensor, learningRate, beta1, beta2, epsilon fl
 	}, nil
 }
 
-
 // performs a single optimization step for all parameters.
 func (a *Adam) Step() error {
-	a.t++ 
+	a.t++
 
 	for _, p := range a.parameters {
 		// skip params that lacks grad
 		if p.Grad == nil {
-			continue 
+			continue
 		}
 
 		paramData := p.GetData()
@@ -88,8 +85,8 @@ func (a *Adam) Step() error {
 		}
 
 		// bias correction terms
-		biasCorrection1 := 1.0 - math.Pow(a.beta1, float64(a.t))
-		biasCorrection2 := 1.0 - math.Pow(a.beta2, float64(a.t))
+		biasCorrection1 := float32(1.0 - math.Pow(float64(a.beta1), float64(a.t)))
+		biasCorrection2 := float32(1.0 - math.Pow(float64(a.beta2), float64(a.t)))
 
 		// apply the Adam update rule element-wise
 		for i := range paramData {
@@ -108,12 +105,12 @@ func (a *Adam) Step() error {
 			v_hat := v_t[i] / biasCorrection2
 
 			// update parameters: param = param - lr * m_hat / (sqrt(v_hat) + epsilon)
-			paramData[i] -= a.learningRate * m_hat / (math.Sqrt(v_hat) + a.epsilon)
+			sqrtVhat := float32(math.Sqrt(float64(v_hat)))
+			paramData[i] -= a.learningRate * m_hat / (sqrtVhat + a.epsilon)
 		}
 	}
 	return nil
 }
-
 
 // sets the gradients of all managed parameters to zero.
 func (a *Adam) ZeroGrad() {

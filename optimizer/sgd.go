@@ -11,19 +11,17 @@ type Optimizer interface {
 	ZeroGrad()
 }
 
-
 // implements the Stochastic Gradient Descent optimizer, with optional momentum.
 type SGD struct {
-	learningRate float64
-	momentum     float64
+	learningRate float32
+	momentum     float32
 	parameters   []*tensor.Tensor
-	velocities   map[*tensor.Tensor][]float64 // Stores momentum velocities
+	velocities   map[*tensor.Tensor][]float32 // Stores momentum velocities
 }
-
 
 // creates a new SGD optimizer.
 // for standard SGD, set momentum to 0.0. A common value for momentum is 0.9.
-func NewSGD(parameters []*tensor.Tensor, learningRate float64, momentum float64) (*SGD, error) {
+func NewSGD(parameters []*tensor.Tensor, learningRate float32, momentum float32) (*SGD, error) {
 	if learningRate <= 0 {
 		return nil, fmt.Errorf("optimizer: learning rate must be positive, got %f", learningRate)
 	}
@@ -45,10 +43,10 @@ func NewSGD(parameters []*tensor.Tensor, learningRate float64, momentum float64)
 	}
 
 	// initialize velocity buffers only if momentum is being used.
-	velocities := make(map[*tensor.Tensor][]float64)
+	velocities := make(map[*tensor.Tensor][]float32)
 	if momentum > 0.0 {
 		for _, p := range validParams {
-			velocities[p] = make([]float64, tensor.Numel(p))
+			velocities[p] = make([]float32, tensor.Numel(p))
 		}
 	}
 
@@ -59,7 +57,6 @@ func NewSGD(parameters []*tensor.Tensor, learningRate float64, momentum float64)
 		velocities:   velocities,
 	}, nil
 }
-
 
 // updates the parameters based on their gradients using the SGD rule.
 func (s *SGD) Step() error {
@@ -95,7 +92,6 @@ func (s *SGD) Step() error {
 	}
 	return nil
 }
-
 
 // sets the gradients of all managed parameters to zero.
 func (s *SGD) ZeroGrad() {

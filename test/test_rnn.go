@@ -21,7 +21,7 @@ func testBasicRNN() {
 	}
 
 	// Create input sequence: [batch_size=2, seq_length=3, input_size=3]
-	inputData := []float64{
+	inputData := []float32{
 		// Batch 1, timestep 1: [0.1, 0.2, 0.3]
 		0.1, 0.2, 0.3,
 		// Batch 1, timestep 2: [0.4, 0.5, 0.6]
@@ -64,7 +64,7 @@ func testBasicLSTM() {
 	}
 
 	// Create input sequence: [batch_size=1, seq_length=2, input_size=3]
-	inputData := []float64{
+	inputData := []float32{
 		// Batch 1, timestep 1: [1.0, 0.5, -0.5]
 		1.0, 0.5, -0.5,
 		// Batch 1, timestep 2: [0.8, -0.3, 0.2]
@@ -105,7 +105,7 @@ func testRNNGradients() {
 	}
 
 	// Create input sequence: [batch_size=1, seq_length=3, input_size=2]
-	inputData := []float64{
+	inputData := []float32{
 		0.5, -0.2, // timestep 1
 		0.3, 0.1,  // timestep 2
 		-0.1, 0.7, // timestep 3

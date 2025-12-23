@@ -6,40 +6,37 @@ import (
 	"math/rand"
 )
 
-
 // randomly sets a fraction of input units to 0 during training.
 type Dropout struct {
-	p           float64 // probability of an element to be zeroed
+	p           float32 // probability of an element to be zeroed
 	training    bool
 	mask        *tensor.Tensor // dropout mask for the backward pass
-	inputTensor *tensor.Tensor // input cache 
+	inputTensor *tensor.Tensor // input cache
 }
 
-
 // creates a new Dropout layer.
-func NewDropout(p float64) *Dropout {
+func NewDropout(p float32) *Dropout {
 	return &Dropout{
 		p:        p,
 		training: true,
 	}
 }
 
-
 func (d *Dropout) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	d.inputTensor = input
 
-	 // in eval mode or if p=0, it's a pass-through layer
+	// in eval mode or if p=0, it's a pass-through layer
 	if !d.training || d.p == 0 {
 		return input, nil
 	}
 
-	// in train 
-	maskData := make([]float64, tensor.Numel(input))
+	// in train
+	maskData := make([]float32, tensor.Numel(input))
 	scale := 1.0 / (1.0 - d.p)
 	for i := range maskData {
 
-		if rand.Float64() > d.p {
-			maskData[i] = scale 
+		if rand.Float32() > d.p {
+			maskData[i] = scale
 		} else {
 			maskData[i] = 0
 		}
@@ -62,7 +59,6 @@ func (d *Dropout) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	return output, nil
 }
 
-
 func (d *Dropout) backward(grad *tensor.Tensor) {
 	// grad only flows through the neurons that were not dropped out.
 	if d.inputTensor != nil && d.inputTensor.RequiresGrad {
@@ -72,7 +68,6 @@ func (d *Dropout) backward(grad *tensor.Tensor) {
 
 	}
 }
-
 
 func (d *Dropout) Parameters() []*tensor.Tensor { return []*tensor.Tensor{} }
 func (d *Dropout) ZeroGrad()                    {}

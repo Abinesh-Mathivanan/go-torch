@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"go-torch/autograd"
@@ -12,9 +13,7 @@ import (
 	"math/rand"
 	"os"
 	"time"
-	"bufio"
 )
-
 
 // data loader
 const mnistDir = "mnist_data"
@@ -39,16 +38,15 @@ func loadImages(filepath string) (*tensor.Tensor, error) {
 	if err != nil {
 		return nil, err
 	}
-	floatData := make([]float64, len(imageData))
+	floatData := make([]float32, len(imageData))
 	for i, v := range imageData {
-		floatData[i] = float64(v) / 255.0
+		floatData[i] = float32(v) / 255.0
 	}
 	shape := []int{int(numImages), 1, int(numRows), int(numCols)}
 	return tensor.NewTensor(shape, floatData)
 }
 
-
-// load train and test labels 
+// load train and test labels
 func loadLabels(filepath string) ([]int, error) {
 	file, err := os.Open(filepath)
 	if err != nil {
@@ -74,39 +72,41 @@ func loadLabels(filepath string) ([]int, error) {
 	return intLabels, nil
 }
 
-
-
-// main 
+// main
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
-	learningRate := 0.001
+	learningRate := float32(0.001)
 	batchSize := 32
 	epochs := 5
 	numClasses := 10
-
 
 	// PHASE 1: PRE-TUI SETUP AND CONSOLE OUTPUT
 	fmt.Println("--- Go-Torch MNIST Trainer ---")
 	fmt.Println("Initializing model with BatchNorm and Dropout...")
 
-
 	model := nn.NewSequential()
 	var err error
 
 	conv1, err := nn.NewConv2D(1, 16, 5, 1, 2)
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	model.Add(conv1)
 
 	model.Add(nn.NewRELU())
 	model.Add(nn.NewMaxPooling2D(2, 2))
 
 	conv2, err := nn.NewConv2D(16, 32, 5, 1, 2)
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	model.Add(conv2)
 
 	bn2, err := nn.NewBatchNorm2d(32, 0.9, 1e-5)
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	model.Add(bn2)
 
 	model.Add(nn.NewRELU())
@@ -114,35 +114,51 @@ func main() {
 	model.Add(nn.NewFlatten())
 
 	linear1, err := nn.NewLinear(32*7*7, 128)
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	model.Add(linear1)
 
 	bn3, err := nn.NewBatchNorm1d(128, 0.9, 1e-5)
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	model.Add(bn3)
 
 	model.Add(nn.NewRELU())
 	model.Add(nn.NewDropout(0.5))
 
 	linear2, err := nn.NewLinear(128, numClasses)
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 	model.Add(linear2)
-
 
 	// model summary
 	inspector := utility.NewModelInspector(model)
 	inspector.Summary()
 
 	fmt.Println("Loading dataset...")
-	trainImages, err := loadImages(fmt.Sprintf("%s/train-images-idx3-ubyte/train-images-idx3-ubyte", mnistDir)); if err != nil { panic(err) }
-	trainLabels, err := loadLabels(fmt.Sprintf("%s/train-labels-idx1-ubyte/train-labels-idx1-ubyte", mnistDir)); if err != nil { panic(err) }
-	testImages, err := loadImages(fmt.Sprintf("%s/t10k-images-idx3-ubyte/t10k-images-idx3-ubyte", mnistDir)); if err != nil { panic(err) }
-	testLabels, err := loadLabels(fmt.Sprintf("%s/t10k-labels-idx1-ubyte/t10k-labels-idx1-ubyte", mnistDir)); if err != nil { panic(err) }
+	trainImages, err := loadImages(fmt.Sprintf("%s/train-images-idx3-ubyte/train-images-idx3-ubyte", mnistDir))
+	if err != nil {
+		panic(err)
+	}
+	trainLabels, err := loadLabels(fmt.Sprintf("%s/train-labels-idx1-ubyte/train-labels-idx1-ubyte", mnistDir))
+	if err != nil {
+		panic(err)
+	}
+	testImages, err := loadImages(fmt.Sprintf("%s/t10k-images-idx3-ubyte/t10k-images-idx3-ubyte", mnistDir))
+	if err != nil {
+		panic(err)
+	}
+	testLabels, err := loadLabels(fmt.Sprintf("%s/t10k-labels-idx1-ubyte/t10k-labels-idx1-ubyte", mnistDir))
+	if err != nil {
+		panic(err)
+	}
 	fmt.Println("Dataset loaded. Initializing TUI...")
-	
+
 	fmt.Println("\nDataset loaded. Press 'Enter' to start training and launch the dashboard...")
 	bufio.NewReader(os.Stdin).ReadBytes('\n')
-
 
 	// PHASE 2: TUI-ONLY MODE
 	dashboard := utility.NewTrainingDashboard(learningRate, batchSize, epochs)
@@ -151,7 +167,7 @@ func main() {
 	go func() {
 		optimizer, _ := optimizer.NewAdam(model.Parameters(), learningRate, 0.9, 0.999, 1e-8)
 
-		batchImagesDataBuffer := make([]float64, batchSize*28*28)
+		batchImagesDataBuffer := make([]float32, batchSize*28*28)
 		batchLabelsBuffer := make([]int, batchSize)
 
 		numTrainSamples := trainImages.GetShape()[0]
@@ -160,23 +176,27 @@ func main() {
 			indices[i] = i
 		}
 		numBatches := (numTrainSamples + batchSize - 1) / batchSize
-		
+
 		totalStartTime := time.Now()
 		dashboard.Log("Starting training run with Adam optimizer...")
 
 		for epoch := 1; epoch <= epochs; epoch++ {
 			model.Train()
-			runningLoss := 0.0
+			runningLoss := float32(0.0)
 			epochStartTime := time.Now()
 			rand.Shuffle(len(indices), func(i, j int) { indices[i], indices[j] = indices[j], indices[i] })
 
 			for i := 1; i <= numBatches; i++ {
 				start := (i - 1) * batchSize
 				end := start + batchSize
-				if end > numTrainSamples { end = numTrainSamples }
+				if end > numTrainSamples {
+					end = numTrainSamples
+				}
 				batchIndices := indices[start:end]
 				currentBatchSize := len(batchIndices)
-				if currentBatchSize == 0 { continue }
+				if currentBatchSize == 0 {
+					continue
+				}
 
 				currentBatchImageData := batchImagesDataBuffer[:currentBatchSize*28*28]
 				batchLabels := batchLabelsBuffer[:currentBatchSize]
@@ -197,7 +217,7 @@ func main() {
 				currentLoss := loss.GetData()[0]
 				runningLoss += currentLoss
 				dashboard.AddLoss(currentLoss)
-				dashboard.UpdateStats(epoch, epochs, i, numBatches, runningLoss/float64(i), epochStartTime, totalStartTime)
+				dashboard.UpdateStats(epoch, epochs, i, numBatches, runningLoss/float32(i), epochStartTime, totalStartTime)
 			}
 
 			model.Eval()
@@ -212,7 +232,7 @@ func main() {
 					correct++
 				}
 			}
-			accuracy := (float64(correct) / float64(numTestSamples)) * 100.0
+			accuracy := (float32(correct) / float32(numTestSamples)) * 100.0
 			dashboard.AddAccuracy(accuracy)
 			dashboard.Log(fmt.Sprintf("Epoch %d validation accuracy: %.2f%%", epoch, accuracy))
 		}

@@ -53,11 +53,11 @@ var benchmarkConfigs = []BenchmarkConfig{
 }
 
 // generateSequenceData creates random input data for RNN/LSTM
-func generateSequenceData(batchSize, seqLength, inputSize int) []float64 {
+func generateSequenceData(batchSize, seqLength, inputSize int) []float32 {
 	totalSize := batchSize * seqLength * inputSize
-	data := make([]float64, totalSize)
+	data := make([]float32, totalSize)
 	for i := range data {
-		data[i] = rand.Float64()*2 - 1 // Range: [-1, 1]
+		data[i] = float32(rand.Float64()*2 - 1) // Range: [-1, 1]
 	}
 	return data
 }

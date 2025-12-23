@@ -1,73 +1,69 @@
 package tensor
 
 import (
-	"fmt"
-	"runtime"
-	"sync"
-	"math"
-	"bytes" 
+	"bytes"
 	"encoding/gob"
+	"fmt"
+	"math"
+	"sync"
 
-	"gonum.org/v1/gonum/mat" // For Dense matrix type and operations To use system-installed C BLAS
+	"gonum.org/v1/gonum/blas"
+	"gonum.org/v1/gonum/blas/blas32"
 )
 
-// NOTE: Most of the functions are self-explanatory, doesn't need much comments / explaantion (except the auto-grad part)
 
-
-
-// fully gob functionality - for model saving 
-func init() {
-    gob.Register(&Tensor{})
+// slice pool - reduce GC from 1900 to 363
+var pool = sync.Pool{
+	New: func() interface{} {
+		return nil
+	},
 }
 
+func getSlice(size int) []float32 {
+	if val := pool.Get(); val != nil {
+		s := val.([]float32)
+		if cap(s) >= size {
+			return s[:size]
+		}
+	}
+	return make([]float32, size)
+}
+
+func putSlice(s []float32) {
+	pool.Put(s)
+}
+
+func init() {
+	gob.Register(&Tensor{})
+}
 
 type tensorGob struct {
 	Shape []int
-	Data  []float64
+	Data  []float32
 }
 
-
 func (t *Tensor) GobEncode() ([]byte, error) {
-	// We will encode our data into a buffer.
 	var buf bytes.Buffer
 	encoder := gob.NewEncoder(&buf)
-
-	// Create an instance of our temporary exported struct and copy the data to it.
-	err := encoder.Encode(tensorGob{
-		Shape: t.shape,
-		Data:  t.data,
-	})
-
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	err := encoder.Encode(tensorGob{Shape: t.shape, Data: t.data})
+	return buf.Bytes(), err
 }
 
 func (t *Tensor) GobDecode(data []byte) error {
-	// create a buffer from the incoming byte slice.
 	buf := bytes.NewBuffer(data)
 	decoder := gob.NewDecoder(buf)
-
-	// decode the data into our temporary exported struct.
 	var tg tensorGob
-	err := decoder.Decode(&tg)
-	if err != nil {
+	if err := decoder.Decode(&tg); err != nil {
 		return err
 	}
-
-	// copy the data from the temporary struct back into our Tensor's unexported fields.
 	t.shape = tg.Shape
 	t.data = tg.Data
-	
 	return nil
 }
 
-
-// simple Tensor struct
 type Tensor struct {
 	shape        []int
-	data         []float64
+	data         []float32
 	Grad         *Tensor
 	RequiresGrad bool
 	Parents      []*Tensor
@@ -75,584 +71,425 @@ type Tensor struct {
 	BackwardFunc func(*Tensor)
 }
 
-// utility function to check if two tensors have the same shape
 func IsSameSize(a, b *Tensor) bool {
-	aShape := a.shape
-	bShape := b.shape
-	if len(aShape) != len(bShape) {
+	if len(a.shape) != len(b.shape) {
 		return false
 	}
-	for i := range aShape {
-		if aShape[i] != bShape[i] {
+	for i := range a.shape {
+		if a.shape[i] != b.shape[i] {
 			return false
 		}
 	}
 	return true
 }
 
-// builds a new tensor with the given shape and data
-func NewTensor(shape []int, data []float64) (*Tensor, error) {
+func NewTensor(shape []int, data []float32) (*Tensor, error) {
 	total := 1
-	if len(shape) == 0 { // Scalar case
-		if len(data) == 0 {
-			total = 1 // Default scalar has 1 element
-		} else if len(data) == 1 {
-			total = 1
-		} else {
-			return nil, fmt.Errorf("scalar shape [] implies 1 element but data has length %d", len(data))
+	for _, dim := range shape {
+		if dim <= 0 {
+			return nil, fmt.Errorf("invalid shape %v", shape)
 		}
-	} else {
-		for _, dim := range shape {
-			if dim <= 0 {
-				return nil, fmt.Errorf("shape %v contains non-positive dimension", shape)
-			}
-			total *= dim
-		}
+		total *= dim
 	}
 
-	if len(data) > 0 && total != len(data) {
-		return nil, fmt.Errorf("shape %v implies %d elements but data has length %d", shape, total, len(data))
-	}
-
-	// Ensure data slice is allocated if input data is nil or empty and total > 0
-	var finalData []float64
+	var finalData []float32
 	if len(data) == 0 {
-		finalData = make([]float64, total) // Initialize with zeros
+		finalData = getSlice(total)
+		for i := range finalData {
+			finalData[i] = 0
+		}
 	} else {
-		finalData = make([]float64, total)
+		if total != len(data) {
+			return nil, fmt.Errorf("shape/data mismatch")
+		}
+		finalData = getSlice(total)
 		copy(finalData, data)
 	}
 
 	return &Tensor{
-		shape:        append([]int{}, shape...), // Defensive copy of shape
-		data:         finalData,                 // Use the new/copied data
-		Grad:         nil,
-		RequiresGrad: false,
-		Parents:      nil,
-		Operation:    "",
-		BackwardFunc: nil,
+		shape: append([]int{}, shape...),
+		data:  finalData,
 	}, nil
 }
 
-// clones a tensor
-func CloneTensor(t *Tensor) *Tensor {
-	clonedData := make([]float64, len(t.data))
-	copy(clonedData, t.data)
-
-	clonedShape := append([]int{}, t.shape...)
-
-	return &Tensor{
-		data:         clonedData,
-		shape:        clonedShape,
-		RequiresGrad: t.RequiresGrad,
-		Grad:         nil,
-		Parents:      nil,
-		Operation:    "",
-		BackwardFunc: nil,
-	}
-}
-
-// adds two tensors
+// AddTensor with BCE (Bounds Check Elimination) optimization
 func AddTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 	if !IsSameSize(t1, t2) {
-		return nil, fmt.Errorf("tensors %v and %v have different sizes for addition", t1, t2)
+		return nil, fmt.Errorf("shape mismatch")
 	}
 
-	outData := make([]float64, len(t1.data))
-	for i := 0; i < len(t1.data); i++ {
-		outData[i] = t1.data[i] + t2.data[i]
+	n := len(t1.data)
+	outData := getSlice(n)
+	d1, d2 := t1.data, t2.data
+
+	// check bounds once before the loop
+	_ = d1[n-1]
+	_ = d2[n-1]
+	_ = outData[n-1]
+	for i := 0; i < n; i++ {
+		outData[i] = d1[i] + d2[i]
 	}
 
-	out, err := NewTensor(t1.shape, outData)
-	if err != nil {
-		return nil, err
-	}
-
+	out, _ := NewTensor(t1.shape, outData)
 	if t1.RequiresGrad || t2.RequiresGrad {
 		out.RequiresGrad = true
 		out.Parents = []*Tensor{t1, t2}
 		out.Operation = "add"
-
 		out.BackwardFunc = func(grad *Tensor) {
-			// The gradient of addition is 1, so we just pass the incoming
-			// gradient to both parents.
-			if t1.RequiresGrad {
-				t1.Backward(grad) // Backward now accumulates
-			}
-			if t2.RequiresGrad {
-				t2.Backward(grad) // Backward now accumulates
-			}
+			if t1.RequiresGrad { t1.Backward(grad) }
+			if t2.RequiresGrad { t2.Backward(grad) }
 		}
 	}
 	return out, nil
 }
 
-// multiplies two tensors
+// MulTensor (Element-wise)
 func MulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 	if !IsSameSize(t1, t2) {
-		return nil, fmt.Errorf("tensors %v and %v have different sizes for multiplication", t1, t2)
+		return nil, fmt.Errorf("shape mismatch")
 	}
 
-	outData := make([]float64, len(t1.data))
-	for i := 0; i < len(t1.data); i++ {
-		outData[i] = t1.data[i] * t2.data[i]
+	n := len(t1.data)
+	outData := getSlice(n)
+	d1, d2 := t1.data, t2.data
+
+	_ = d1[n-1]
+	_ = d2[n-1]
+	_ = outData[n-1]
+	for i := 0; i < n; i++ {
+		outData[i] = d1[i] * d2[i]
 	}
 
-	out, err := NewTensor(t1.shape, outData)
-	if err != nil {
-		return nil, err
-	}
-
+	out, _ := NewTensor(t1.shape, outData)
 	if t1.RequiresGrad || t2.RequiresGrad {
 		out.RequiresGrad = true
 		out.Parents = []*Tensor{t1, t2}
 		out.Operation = "mul"
-
 		out.BackwardFunc = func(grad *Tensor) {
-			var wg sync.WaitGroup
-			numGoroutines := runtime.NumCPU()
-			jobsPerGo := (len(grad.data) + numGoroutines - 1) / numGoroutines
-
 			if t1.RequiresGrad {
-				if t1.Grad == nil { t1.ZeroGrad() } // Ensure grad tensor exists
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					t1GradData := t1.Grad.GetData()
-					gradData := grad.GetData()
-					t2Data := t2.GetData()
-					for i := 0; i < numGoroutines; i++ {
-						start, end := i*jobsPerGo, (i+1)*jobsPerGo
-						if end > len(gradData) { end = len(gradData) }
-						if start >= end { continue }
-						// Launch inner goroutine for parallel accumulation
-						wg.Add(1)
-						go func(s, e int) {
-							defer wg.Done()
-							for j := s; j < e; j++ {
-								t1GradData[j] += gradData[j] * t2Data[j]
-							}
-						}(start, end)
-					}
-				}()
+				g1, _ := MulTensor(grad, t2)
+				t1.Backward(g1)
 			}
-
 			if t2.RequiresGrad {
-				if t2.Grad == nil { t2.ZeroGrad() } // Ensure grad tensor exists
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					t2GradData := t2.Grad.GetData()
-					gradData := grad.GetData()
-					t1Data := t1.GetData()
-					for i := 0; i < numGoroutines; i++ {
-						start, end := i*jobsPerGo, (i+1)*jobsPerGo
-						if end > len(gradData) { end = len(gradData) }
-						if start >= end { continue }
-						wg.Add(1)
-						go func(s, e int) {
-							defer wg.Done()
-							for j := s; j < e; j++ {
-								t2GradData[j] += gradData[j] * t1Data[j]
-							}
-						}(start, end)
-					}
-				}()
+				g2, _ := MulTensor(grad, t1)
+				t2.Backward(g2)
 			}
-			wg.Wait()
 		}
 	}
 	return out, nil
 }
 
-// returns the number of elements in a tensor
-func Numel(t *Tensor) int {
-	if t == nil {
-		return 0
-	}
-	if len(t.shape) == 0 {
-		if len(t.data) == 1 {
-			return 1
-		}
-		return 0
-	}
-	n := 1
-	for _, s := range t.shape {
-		if s <= 0 {
-			return 0
-		}
-		n *= s
-	}
-	return n
-}
-
-// reshapes the given tensor to the given shape
-func Reshape(t *Tensor, newShape []int) (*Tensor, error) {
-	originalNumel := Numel(t)
-	reshapedNumel := 1
-	if len(newShape) == 0 {
-		if originalNumel == 1 {
-			reshapedNumel = 1
-		} else {
-			return nil, fmt.Errorf("cannot reshape tensor with %d elements to scalar shape %v unless it has 1 element", originalNumel, newShape)
-		}
-	} else {
-		for _, dim := range newShape {
-			if dim <= 0 {
-				return nil, fmt.Errorf("newShape %v contains non-positive dimension", newShape)
-			}
-			reshapedNumel *= dim
-		}
+// MatMulTensor optimized with blas32 
+func MatMulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
+	s1, s2 := t1.shape, t2.shape
+	if len(s1) != 2 || len(s2) != 2 || s1[1] != s2[0] {
+		return nil, fmt.Errorf("matmul shape mismatch: %v, %v", s1, s2)
 	}
 
-	if originalNumel != reshapedNumel {
-		return nil, fmt.Errorf("cannot reshape tensor with %d elements to shape %v (requires %d elements)", originalNumel, newShape, reshapedNumel)
-	}
+	M, K, N := s1[0], s1[1], s2[1]
+	outData := getSlice(M * N)
 
-	outData := make([]float64, len(t.data))
-	copy(outData, t.data)
+	// blas32.Gemm for high performance float32 matmul
+	// C = alpha*A*B + beta*C
+	blas32.Gemm(blas.NoTrans, blas.NoTrans, 1.0,
+		blas32.General{Rows: M, Cols: K, Stride: K, Data: t1.data},
+		blas32.General{Rows: K, Cols: N, Stride: N, Data: t2.data},
+		0.0,
+		blas32.General{Rows: M, Cols: N, Stride: N, Data: outData},
+	)
 
-	out, err := NewTensor(newShape, outData)
-	if err != nil {
-		return nil, err
-	}
-
-	if t.RequiresGrad {
+	out, _ := NewTensor([]int{M, N}, outData)
+	if t1.RequiresGrad || t2.RequiresGrad {
 		out.RequiresGrad = true
-		out.Parents = []*Tensor{t}
-		out.Operation = "reshape"
+		out.Parents = []*Tensor{t1, t2}
+		out.Operation = "matmul"
 		out.BackwardFunc = func(grad *Tensor) {
-			if t.RequiresGrad {
-				// The gradient must be reshaped back to the parent's original shape.
-				// The data itself doesn't change, just the view.
-				reshapedGradForT, _ := NewTensor(append([]int{}, t.shape...), grad.data)
-				t.Backward(reshapedGradForT)
+			if t1.RequiresGrad {
+				// grad [M,N] @ t2.T [N,K]
+				gData1 := getSlice(M * K)
+				blas32.Gemm(blas.NoTrans, blas.Trans, 1.0,
+					blas32.General{Rows: M, Cols: N, Stride: N, Data: grad.data},
+					blas32.General{Rows: K, Cols: N, Stride: N, Data: t2.data},
+					0.0,
+					blas32.General{Rows: M, Cols: K, Stride: K, Data: gData1},
+				)
+				gt1, _ := NewTensor([]int{M, K}, gData1)
+				t1.Backward(gt1)
+			}
+			if t2.RequiresGrad {
+				// t1.T [K,M] @ grad [M,N]
+				gData2 := getSlice(K * N)
+				blas32.Gemm(blas.Trans, blas.NoTrans, 1.0,
+					blas32.General{Rows: M, Cols: K, Stride: K, Data: t1.data},
+					blas32.General{Rows: M, Cols: N, Stride: N, Data: grad.data},
+					0.0,
+					blas32.General{Rows: K, Cols: N, Stride: N, Data: gData2},
+				)
+				gt2, _ := NewTensor([]int{K, N}, gData2)
+				t2.Backward(gt2)
 			}
 		}
 	}
 	return out, nil
 }
 
-// this defines the GetData() and GetShape() accessors, used for testing & debugging
-func (t *Tensor) GetData() []float64 {
-	return t.data
-}
-
-func (t *Tensor) GetShape() []int {
-	return t.shape
-}
-
-// returns a tensor with all elements set to 1
-func OnesLike(t *Tensor) (*Tensor, error) {
-	shape := append([]int{}, t.shape...)
-	size := Numel(t)
-	if size == 0 && len(t.shape) > 0 {
-		validShape := true
-		for _, dim := range t.shape {
-			if dim <= 0 {
-				validShape = false
-				break
-			}
-		}
-		if !validShape {
-			return nil, fmt.Errorf("cannot create OnesLike for tensor with invalid shape %v resulting in 0 elements", t.shape)
-		}
-	}
-
-	data := make([]float64, size)
-	for i := range data {
-		data[i] = 1
-	}
-	newT, err := NewTensor(shape, data)
-	if err != nil {
-		return nil, err
-	}
-	return newT, nil
-}
-
-// sets the gradient of a tensor to zero
 func (t *Tensor) ZeroGrad() {
 	if t.Grad != nil {
-		for i := range t.Grad.data {
-			t.Grad.data[i] = 0
-		}
+		d := t.Grad.data
+		for i := range d { d[i] = 0 }
 	} else if t.RequiresGrad {
-		numElements := Numel(t)
-		if numElements < 0 {
-			numElements = 0
-		}
-		zeroData := make([]float64, numElements)
-		gradTensor, err := NewTensor(append([]int{}, t.shape...), zeroData)
-		if err == nil {
-			gradTensor.RequiresGrad = false
-			t.Grad = gradTensor
-		}
+		t.Grad, _ = NewTensor(t.shape, nil)
 	}
 }
 
-// computes the backward pass for a tensor
 func (t *Tensor) Backward(grad *Tensor) {
-	if !t.RequiresGrad {
-		return
-	}
-
-	// This function is now ONLY a gradient accumulator.
-	// The autograd engine is responsible for calling t.BackwardFunc.
-
+	if !t.RequiresGrad { return }
 	if grad == nil {
-		// This should ideally not be hit if using the autograd engine,
-		// which always starts with a gradient of 1.0 for the root.
 		if Numel(t) == 1 {
-			grad, _ = NewTensor(t.shape, []float64{1.0})
-		} else {
-			// Cannot proceed without a gradient for a non-scalar tensor.
-			return
-		}
-	}
-
-	if !IsSameSize(t, grad) {
-		fmt.Printf("Error: Mismatch in shape during backward accumulation. Tensor shape: %v, Grad shape: %v\n", t.shape, grad.shape)
-		return
+			grad, _ = NewTensor(t.shape, []float32{1.0})
+		} else { return }
 	}
 
 	if t.Grad == nil {
-		// If grad tensor doesn't exist, create it by copying the incoming grad.
-		gradDataCopy := make([]float64, len(grad.data))
-		copy(gradDataCopy, grad.data)
-		initializedGrad, err := NewTensor(append([]int{}, t.shape...), gradDataCopy)
-		if err == nil {
-			initializedGrad.RequiresGrad = false
-			t.Grad = initializedGrad
-		} else {
-			fmt.Printf("Error initializing gradient tensor: %v\n", err)
-		}
+		t.Grad = CloneTensor(grad)
+		t.Grad.RequiresGrad = false
 	} else {
-		// If it exists, accumulate.
-		for i := range t.Grad.data {
-			t.Grad.data[i] += grad.data[i]
+		d, gd := t.Grad.data, grad.data
+		_ = d[len(d)-1]
+		_ = gd[len(d)-1]
+		for i := range d {
+			d[i] += gd[i]
 		}
 	}
 }
 
-// Transpose function (no changes from your provided version)
-func Transpose(t *Tensor) (*Tensor, error) {
-	shape := t.GetShape()
-	if len(shape) < 2 {
-		return nil, fmt.Errorf("transpose requires a tensor with at least 2 dimensions, got %v", shape)
+func AddTensorBroadcast(a *Tensor, b *Tensor) (*Tensor, error) {
+	aShape, bShape := a.shape, b.shape
+	outData := getSlice(Numel(a))
+	aData, bData := a.data, b.data
+
+	// Implementation for 4D (Conv) and 2D (Linear) Bias Addition
+	if len(aShape) == 4 && len(bShape) == 1 {
+		B, C, HW := aShape[0], aShape[1], aShape[2]*aShape[3]
+		for b_idx := 0; b_idx < B; b_idx++ {
+			for c_idx := 0; c_idx < C; c_idx++ {
+				bias := bData[c_idx]
+				offset := b_idx*C*HW + c_idx*HW
+				for i := 0; i < HW; i++ {
+					outData[offset+i] = aData[offset+i] + bias
+				}
+			}
+		}
+	} else if len(aShape) == 2 && len(bShape) == 1 {
+		B, F := aShape[0], aShape[1]
+		for r := 0; r < B; r++ {
+			offset := r * F
+			for c := 0; c < F; c++ {
+				outData[offset+c] = aData[offset+c] + bData[c]
+			}
+		}
 	}
+
+	out, _ := NewTensor(aShape, outData)
+	if a.RequiresGrad || b.RequiresGrad {
+		out.RequiresGrad, out.Parents, out.Operation = true, []*Tensor{a, b}, "add_broadcast"
+		out.BackwardFunc = func(grad *Tensor) {
+			if a.RequiresGrad { a.Backward(grad) }
+			if b.RequiresGrad {
+				b.ZeroGrad()
+				gD, bGD := grad.data, b.Grad.data
+				if len(aShape) == 4 {
+					B, C, HW := aShape[0], aShape[1], aShape[2]*aShape[3]
+					for i := 0; i < B; i++ {
+						for j := 0; j < C; j++ {
+							off, sum := i*C*HW+j*HW, float32(0)
+							for k := 0; k < HW; k++ { sum += gD[off+k] }
+							bGD[j] += sum
+						}
+					}
+				} else {
+					B, F := aShape[0], aShape[1]
+					for c := 0; c < F; c++ {
+						sum := float32(0)
+						for r := 0; r < B; r++ { sum += gD[r*F+c] }
+						bGD[c] += sum
+					}
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+// --- Basic Utilities ---
+
+func Numel(t *Tensor) int {
+	res := 1
+	for _, v := range t.shape { res *= v }
+	return res
+}
+
+func (t *Tensor) GetData() []float32 { return t.data }
+func (t *Tensor) GetShape() []int    { return t.shape }
+
+func CloneTensor(t *Tensor) *Tensor {
+	d := getSlice(len(t.data))
+	copy(d, t.data)
+	return &Tensor{shape: append([]int{}, t.shape...), data: d, RequiresGrad: t.RequiresGrad}
+}
+
+func (t *Tensor) Pow(scalar float32) *Tensor {
+	outData := getSlice(len(t.data))
+	for i, v := range t.data {
+		outData[i] = float32(math.Pow(float64(v), float64(scalar)))
+	}
+	out, _ := NewTensor(t.shape, outData)
+	return out
+}
+
+func Sub(t1, t2 *Tensor) *Tensor {
+	outData := getSlice(Numel(t1))
+	d1, d2 := t1.data, t2.data
+	if IsSameSize(t1, t2) {
+		for i := range d1 { outData[i] = d1[i] - d2[i] }
+	} else if len(t1.shape) == 2 && t2.shape[0] == 1 { // Broadcast sub
+		for i := 0; i < t1.shape[0]; i++ {
+			for j := 0; j < t1.shape[1]; j++ {
+				outData[i*t1.shape[1]+j] = d1[i*t1.shape[1]+j] - d2[j]
+			}
+		}
+	}
+	out, _ := NewTensor(t1.shape, outData)
+	return out
+}
+
+func (t *Tensor) MulScalar(s float32) *Tensor {
+	d := getSlice(len(t.data))
+	for i, v := range t.data { d[i] = v * s }
+	out, _ := NewTensor(t.shape, d)
+	return out
+}
+
+func Sum(t *Tensor, axis int, keepDims bool) *Tensor {
+	s := t.shape
+	var nS []int
+	var d []float32
+	if axis == 0 {
+		d = getSlice(s[1])
+		for j := 0; j < s[1]; j++ {
+			var sum float32
+			for i := 0; i < s[0]; i++ { sum += t.data[i*s[1]+j] }
+			d[j] = sum
+		}
+		if keepDims { nS = []int{1, s[1]} } else { nS = []int{s[1]} }
+	}
+	out, _ := NewTensor(nS, d)
+	return out
+}
+
+func Mean(t *Tensor, axis int, keepDims bool) *Tensor {
+	return Sum(t, axis, keepDims).MulScalar(1.0 / float32(t.shape[axis]))
+}
+
+func Var(t *Tensor, axis int, keepDims bool) *Tensor {
+	mean := Mean(t, axis, true)
+	diff := Sub(t, mean)
+	return Mean(diff.Pow(2), axis, keepDims)
+}
+
+func Reshape(t *Tensor, newShape []int) (*Tensor, error) {
+	if Numel(t) != 1 {
+		total := 1
+		for _, v := range newShape { total *= v }
+		if total != Numel(t) { return nil, fmt.Errorf("reshape mismatch") }
+	}
+	out, _ := NewTensor(newShape, t.data)
+	if t.RequiresGrad {
+		out.RequiresGrad, out.Parents, out.Operation = true, []*Tensor{t}, "reshape"
+		out.BackwardFunc = func(grad *Tensor) {
+			g, _ := NewTensor(t.shape, grad.data)
+			t.Backward(g)
+		}
+	}
+	return out, nil
+}
+
+func ArgMax(t *Tensor) int {
+	idx, max := 0, t.data[0]
+	for i, v := range t.data {
+		if v > max { max, idx = v, i }
+	}
+	return idx
+}
+
+func (t *Tensor) Slice(index int) (*Tensor, error) {
+	s := t.shape
+	numel := s[1] * s[2] * s[3]
+	newData := getSlice(numel)
+	copy(newData, t.data[index*numel:(index+1)*numel])
+	return NewTensor([]int{1, s[1], s[2], s[3]}, newData)
+}
+
+// OnesLike returns a tensor of the same shape as t but filled with 1.0
+func OnesLike(t *Tensor) (*Tensor, error) {
+	size := Numel(t)
+	data := getSlice(size)
+	for i := 0; i < size; i++ {
+		data[i] = 1.0
+	}
+	return NewTensor(t.shape, data)
+}
+
+// AddScalar adds a constant value to every element
+func (t *Tensor) AddScalar(scalar float32) *Tensor {
+	n := len(t.data)
+	outData := getSlice(n)
+	d := t.data
+	_ = d[n-1]
+	_ = outData[n-1]
+	for i := 0; i < n; i++ {
+		outData[i] = d[i] + scalar
+	}
+	out, _ := NewTensor(t.shape, outData)
+	return out
+}
+
+func Transpose(t *Tensor) (*Tensor, error) {
+	shape := t.shape
 	if len(shape) != 2 {
 		return nil, fmt.Errorf("transpose currently only supports 2D tensors, got %v", shape)
 	}
 
-	newShape := append([]int{}, shape...)
-	newShape[0], newShape[1] = newShape[1], newShape[0] // Corrected for 2D transpose
-
-	originalNumel := Numel(t)
-	tData := t.GetData()
-	outData := make([]float64, originalNumel)
-
+	newShape := []int{shape[1], shape[0]}
+	n := len(t.data)
+	outData := getSlice(n)
+	
 	M, N := shape[0], shape[1]
+	tData := t.data
+	
 	for r := 0; r < M; r++ {
 		for c := 0; c < N; c++ {
-			originalFlatIndex := r*N + c
-			transposedFlatIndex := c*M + r // N_new * r_new + c_new => M * c + r
-			outData[transposedFlatIndex] = tData[originalFlatIndex]
+			// Row-major to Column-major mapping
+			outData[c*M+r] = tData[r*N+c]
 		}
 	}
 
-	out, err := NewTensor(newShape, outData)
-	if err != nil {
-		return nil, fmt.Errorf("transpose failed to create output tensor: %w", err)
-	}
-
+	out, _ := NewTensor(newShape, outData)
 	if t.RequiresGrad {
 		out.RequiresGrad = true
 		out.Parents = []*Tensor{t}
 		out.Operation = "transpose"
 		out.BackwardFunc = func(grad *Tensor) {
-			if t.RequiresGrad {
-				transposedGrad, err := Transpose(grad)
-				if err != nil {
-					fmt.Printf("Warning: Failed to transpose gradient in Transpose backward: %v\n", err)
-					return
-				}
-				t.Backward(transposedGrad)
-			}
+			transposedGrad, _ := Transpose(grad)
+			t.Backward(transposedGrad)
 		}
 	}
 	return out, nil
 }
 
-const blasThreshold = 64 
-
-
-func matMulWithTranspose(t1, t2 *Tensor, transposeT1, transposeT2 bool) (*Tensor, error) {
-	shape1 := t1.GetShape()
-	shape2 := t2.GetShape()
-
-	gonumT1 := mat.NewDense(shape1[0], shape1[1], t1.GetData())
-	gonumT2 := mat.NewDense(shape2[0], shape2[1], t2.GetData())
-
-	var a, b mat.Matrix = gonumT1, gonumT2
-	if transposeT1 {
-		a = a.T()
-	}
-	if transposeT2 {
-		b = b.T()
-	}
-
-	r, c := a.Dims()
-	br, bc := b.Dims()
-	if c != br {
-		return nil, fmt.Errorf("matmul incompatible shapes after transpose")
-	}
-
-	gonumOut := mat.NewDense(r, bc, nil)
-	gonumOut.Mul(a, b)
-
-	outShape := []int{r, bc}
-	rawData := gonumOut.RawMatrix().Data
-	outData := make([]float64, len(rawData))
-	copy(outData, rawData)
-	
-	return NewTensor(outShape, outData)
-}
-
-
-
-// MatMulTensor performs matrix multiplication between two tensors.
-// Uses BLAS (via gonum) for larger matrices, falls back to parallel Go for smaller ones.
-func MatMulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
-	shape1 := t1.GetShape()
-	shape2 := t2.GetShape()
-
-	if len(shape1) != 2 || len(shape2) != 2 {
-		return nil, fmt.Errorf("matmul supports 2D tensors only, got %v and %v", shape1, shape2)
-	}
-
-	M := shape1[0]
-	K1 := shape1[1]
-	K2 := shape2[0]
-	N := shape2[1]
-
-	if K1 != K2 {
-		return nil, fmt.Errorf("matmul incompatible shapes: inner dimensions mismatch %v (%d) and %v (%d)", shape1, K1, shape2, K2)
-	}
-	K := K1
-
-	outShape := []int{M, N}
-	var outData []float64
-	var err error
-
-	// Decide whether to use BLAS or pure Go parallel version
-	// You can tune blasThreshold based on benchmarking
-	useBLAS := M > blasThreshold && K > blasThreshold && N > blasThreshold && M*K*N > blasThreshold*blasThreshold*blasThreshold/10 // Heuristic
-
-	if useBLAS {
-		// --- BLAS Version using gonum ---
-		// Convert t1 and t2 data to gonum.Dense matrices
-		// gonum.Dense expects data in row-major order if a slice is provided
-		gonumT1 := mat.NewDense(M, K, t1.GetData()) // Assumes t1.GetData() returns a fresh slice or is safe to use
-		gonumT2 := mat.NewDense(K, N, t2.GetData()) // Assumes t2.GetData() returns a fresh slice or is safe to use
-
-		gonumOut := mat.NewDense(M, N, nil) // nil data means it will allocate its own
-
-		// Perform matrix multiplication: C = A * B
-		gonumOut.Mul(gonumT1, gonumT2)
-
-		// Get the data back from gonumOut. RawMatrix().Data returns the backing slice.
-		// It's important to copy this data if gonumOut might be modified elsewhere,
-		// or if our Tensor expects to own its data slice.
-		// For now, we assume we can copy it into a new slice for our Tensor.
-		rawData := gonumOut.RawMatrix().Data
-		outData = make([]float64, len(rawData))
-		copy(outData, rawData)
-
-	} else {
-		// if not blas, fall back to parallel Go
-		outData = make([]float64, M*N)
-		t1Data := t1.GetData()
-		t2Transposed, transposeErr := Transpose(t2) // Cache locality
-		if transposeErr != nil {
-			return nil, fmt.Errorf("matmul (go version) failed to transpose t2: %w", transposeErr)
-		}
-		t2TransposedData := t2Transposed.GetData()
-
-		numGoroutines := runtime.NumCPU()
-		rowsPerGoroutine := (M + numGoroutines - 1) / numGoroutines
-
-		var wg sync.WaitGroup
-		for i := 0; i < numGoroutines; i++ {
-			startRow := i * rowsPerGoroutine
-			endRow := (i + 1) * rowsPerGoroutine
-			if endRow > M {
-				endRow = M
-			}
-			if startRow >= endRow {
-				continue
-			}
-
-			wg.Add(1)
-			go func(sR, eR int) {
-				defer wg.Done()
-				for rIdx := sR; rIdx < eR; rIdx++ {
-					for cIdx := 0; cIdx < N; cIdx++ {
-						sum := 0.0
-						t1RowOffset := rIdx * K
-						t2TRowOffset := cIdx * K // t2Transposed is N x K, so cIdx is row index
-						for kIdx := 0; kIdx < K; kIdx++ {
-							sum += t1Data[t1RowOffset+kIdx] * t2TransposedData[t2TRowOffset+kIdx]
-						}
-						outData[rIdx*N+cIdx] = sum
-					}
-				}
-			}(startRow, endRow)
-		}
-		wg.Wait()
-	}
-
-	out, err := NewTensor(outShape, outData)
-	if err != nil {
-		return nil, fmt.Errorf("matmul failed to create output tensor: %w", err)
-	}
-
-	if t1.RequiresGrad || t2.RequiresGrad {
-		out.RequiresGrad = true
-		out.Parents = []*Tensor{t1, t2}
-		out.Operation = "matmul"
-
-		out.BackwardFunc = func(grad *Tensor) {
-			// dL/dX = dL/dO @ W.T  => grad @ t2.T
-			// dL/dW = X.T @ dL/dO  => t1.T @ grad
-			
-			if t1.RequiresGrad {
-				gradForT1, err := matMulWithTranspose(grad, t2, false, true) // grad * t2.T
-				if err != nil {
-					fmt.Printf("Warning: MatMul backward failed to compute grad for t1: %v\n", err)
-				} else {
-					t1.Backward(gradForT1)
-				}
-			}
-
-			if t2.RequiresGrad {
-				gradForT2, err := matMulWithTranspose(t1, grad, true, false) // t1.T * grad
-				if err != nil {
-					fmt.Printf("Warning: MatMul backward failed to compute grad for t2: %v\n", err)
-				} else {
-					t2.Backward(gradForT2)
-				}
-			}
-		}
-	}
-
-	return out, nil
-}
-
-
-// Permute reorders the dimensions of a tensor according to the given axes.
 func Permute(t *Tensor, axes []int) (*Tensor, error) {
 	if len(t.shape) != len(axes) {
-		return nil, fmt.Errorf("permute: number of axes (%d) must match tensor rank (%d)", len(axes), len(t.shape))
+		return nil, fmt.Errorf("permute: axes mismatch")
 	}
 	
 	newShape := make([]int, len(t.shape))
@@ -660,12 +497,12 @@ func Permute(t *Tensor, axes []int) (*Tensor, error) {
 		newShape[i] = t.shape[axis]
 	}
 	
-	outData := make([]float64, Numel(t))
-	
-	// A fast path for the common Conv2D case: [C, B, H, W] -> [B, C, H, W] (axes {1, 0, 2, 3})
-	if len(t.shape) == 4 && len(axes) == 4 && axes[0] == 1 && axes[1] == 0 && axes[2] == 2 && axes[3] == 3 {
+	outData := getSlice(Numel(t))
+
+	// Optimized Fast Path for Conv2D: [1, 0, 2, 3]
+	if len(t.shape) == 4 && axes[0] == 1 && axes[1] == 0 {
 		C, B, H, W := t.shape[0], t.shape[1], t.shape[2], t.shape[3]
-		tData := t.GetData()
+		tData := t.data
 		for b := 0; b < B; b++ {
 			for c := 0; c < C; c++ {
 				for h := 0; h < H; h++ {
@@ -678,325 +515,22 @@ func Permute(t *Tensor, axes []int) (*Tensor, error) {
 			}
 		}
 	} else {
-		// A generic N-D implementation is complex and not included here for brevity.
-		return nil, fmt.Errorf("permute currently only supports the specific [1, 0, 2, 3] permutation for 4D tensors")
+		return nil, fmt.Errorf("permute: only axes [1, 0, 2, 3] supported for 4D")
 	}
 
-	out, err := NewTensor(newShape, outData)
-	if err != nil {
-		return nil, err
-	}
-
-	if t.RequiresGrad {
-		out.RequiresGrad = true
-		out.Parents = []*Tensor{t}
-		out.Operation = "permute"
-		out.BackwardFunc = func(grad *Tensor) {
-			if t.RequiresGrad {
-				inverseAxes := make([]int, len(axes))
-				for i, axis := range axes {
-					inverseAxes[axis] = i
-				}
-				gradForT, err := Permute(grad, inverseAxes)
-				if err != nil {
-					panic(fmt.Sprintf("error permuting gradient: %v", err))
-				}
-				t.Backward(gradForT)
-			}
-		}
-	}
-
-	return out, nil
-}
-
-
-// AddTensorBroadcast performs element-wise addition with broadcasting.
-// It currently supports adding a 1D tensor (b) to a 4D tensor (a).
-// Shape a: [Batch, Channels, H, W], Shape b: [Channels]
-func AddTensorBroadcast(a *Tensor, b *Tensor) (*Tensor, error) {
-	aShape := a.GetShape()
-	bShape := b.GetShape()
-
-	outData := make([]float64, Numel(a))
-	aData := a.GetData()
-	bData := b.GetData()
-
-	// 4D Conv2D case
-	if len(aShape) == 4 && len(bShape) == 1 && aShape[1] == bShape[0] {
-		B, C, H, W := aShape[0], aShape[1], aShape[2], aShape[3]
-		numGoroutines := runtime.NumCPU()
-		var wg sync.WaitGroup
-		batchesPerGo := (B + numGoroutines - 1) / numGoroutines
-		for i := 0; i < numGoroutines; i++ {
-			startBatch := i * batchesPerGo
-			endBatch := (i + 1) * batchesPerGo
-			if endBatch > B {
-				endBatch = B
-			}
-			if startBatch >= endBatch {
-				continue
-			}
-
-			wg.Add(1)
-			go func(sB, eB int) {
-				defer wg.Done()
-				for b_idx := sB; b_idx < eB; b_idx++ {
-					for c_idx := 0; c_idx < C; c_idx++ {
-						biasVal := bData[c_idx]
-						offset := b_idx*(C*H*W) + c_idx*(H*W)
-						for i := 0; i < H*W; i++ {
-							idx := offset + i
-							outData[idx] = aData[idx] + biasVal
-						}
-					}
-				}
-			}(startBatch, endBatch)
-		}
-		wg.Wait()
-
-		// 2D Linear layer case
-	} else if len(aShape) == 2 && len(bShape) == 1 && aShape[1] == bShape[0] {
-		B, F := aShape[0], aShape[1]
-		numGoroutines := runtime.NumCPU()
-		var wg sync.WaitGroup
-		rowsPerGo := (B + numGoroutines - 1) / numGoroutines
-		for i := 0; i < numGoroutines; i++ {
-			startRow := i * rowsPerGo
-			endRow := (i + 1) * rowsPerGo
-			if endRow > B {
-				endRow = B
-			}
-			if startRow >= endRow {
-				continue
-			}
-
-			wg.Add(1)
-			go func(sR, eR int) {
-				defer wg.Done()
-				for r := sR; r < eR; r++ {
-					offset := r * F
-					for c := 0; c < F; c++ {
-						outData[offset+c] = aData[offset+c] + bData[c]
-					}
-				}
-			}(startRow, endRow) 
-		}
-		wg.Wait()
-	} else {
-		return nil, fmt.Errorf("unsupported broadcast: a=%v, b=%v. Only 4D+1D and 2D+1D supported", aShape, bShape)
-	}
-
-	out, err := NewTensor(aShape, outData)
-	if err != nil {
-		return nil, err
-	}
-
-	if a.RequiresGrad || b.RequiresGrad {
-		out.RequiresGrad = true
-		out.Parents = []*Tensor{a, b}
-		out.Operation = "add_broadcast"
-		out.BackwardFunc = func(grad *Tensor) {
-			if a.RequiresGrad {
-				a.Backward(grad) // For a, grad flows straight through
-			}
-			if b.RequiresGrad {
-				if b.Grad == nil {
-					b.ZeroGrad()
-				}
-				gradData := grad.GetData()
-				bGradData := b.Grad.GetData()
-
-				// Sum gradients across the broadcasted dimension(s)
-				if len(aShape) == 4 { // 4D case
-					B, C, H, W := aShape[0], aShape[1], aShape[2], aShape[3]
-					for i := 0; i < B; i++ {
-						for j := 0; j < C; j++ {
-							offset := i*(C*H*W) + j*(H*W)
-							sum := 0.0
-							for k := 0; k < H*W; k++ {
-								sum += gradData[offset+k]
-							}
-							bGradData[j] += sum
-						}
-					}
-				} else if len(aShape) == 2 { // 2D case
-					B, F := aShape[0], aShape[1]
-					for c := 0; c < F; c++ {
-						sum := 0.0
-						for r := 0; r < B; r++ {
-							sum += gradData[r*F+c]
-						}
-						bGradData[c] += sum
-					}
-				}
-			}
-		}
-	}
-	return out, nil
-}
-
-
-// returns the index of the maximum value in a tensor.
-// effectively flattens the tensor before finding the index.
-func ArgMax(t *Tensor) int {
-	data := t.GetData()
-	if len(data) == 0 {
-		return -1 
-	}
-	maxIdx := 0
-	maxVal := data[0]
-	for i := 1; i < len(data); i++ {
-		if data[i] > maxVal {
-			maxVal = data[i]
-			maxIdx = i
-		}
-	}
-	return maxIdx
-}
-
-
-// extracts a single item from a 4D tensor along the batch dimension (axis 0).
-func (t *Tensor) Slice(index int) (*Tensor, error) {
-	shape := t.GetShape() // Expects [B, C, H, W]
-	if len(shape) != 4 {
-		return nil, fmt.Errorf("slice is only supported for 4D tensors, got %dD", len(shape))
-	}
-	B, C, H, W := shape[0], shape[1], shape[2], shape[3]
-	if index < 0 || index >= B {
-		return nil, fmt.Errorf("slice index %d out of bounds for batch size %d", index, B)
-	}
-	
-	newShape := []int{1, C, H, W}
-	numelPerItem := C * H * W
-	start := index * numelPerItem
-	end := start + numelPerItem
-	
-	newData := make([]float64, numelPerItem)
-	copy(newData, t.data[start:end])
-	
-	return NewTensor(newShape, newData)
-}
-
-
-// prints the tensor in readable format
-func PrintTensor(t *Tensor) {
-	if t == nil {
-		fmt.Println("<nil tensor>")
-		return
-	}
-	fmt.Printf("Tensor(shape=%v, data=%v, requires_grad=%v", t.shape, t.data, t.RequiresGrad)
-	if t.Grad != nil {
-		fmt.Printf(", grad_data=%v (shape=%v)", t.Grad.data, t.Grad.shape)
-	}
-	if t.Operation != "" {
-		fmt.Printf(", op=%s", t.Operation)
-	}
-	fmt.Println(")")
-}
-
-
-/* Element-wise statistical functions */ 
-
-
-// calculates the sum of a tensor along a given axis.
-// if keepDims is true, the summed axis is preserved with size 1.
-func Sum(t *Tensor, axis int, keepDims bool) *Tensor {
-	shape := t.GetShape()
-	data := t.GetData()
-	var newShape []int
-	var outData []float64
-
-	if axis == 0 {
-		outData = make([]float64, shape[1])
-		for j := 0; j < shape[1]; j++ {
-			sum := 0.0
-			for i := 0; i < shape[0]; i++ {
-				sum += data[i*shape[1]+j]
-			}
-			outData[j] = sum
-		}
-		if keepDims {
-			newShape = []int{1, shape[1]}
-		} else {
-			newShape = []int{shape[1]}
-		}
-	}
 	out, _ := NewTensor(newShape, outData)
-	return out
-}
-
-
-// calculates the mean of a tensor along a given axis.
-func Mean(t *Tensor, axis int, keepDims bool) *Tensor {
-	sum := Sum(t, axis, keepDims)
-	N := float64(t.GetShape()[axis])
-	return sum.MulScalar(1.0 / N)
-}
-
-
-// raises each element of the tensor to the power of the scalar.
-func (t *Tensor) Pow(scalar float64) *Tensor {
-	outData := make([]float64, len(t.data))
-	for i, v := range t.data {
-		outData[i] = math.Pow(v, scalar)
-	}
-	out, _ := NewTensor(t.shape, outData)
-	return out
-}
-
-
-// calculates the variance of a tensor along a given axis.
-func Var(t *Tensor, axis int, keepDims bool) *Tensor {
-	mean := Mean(t, axis, true) 
-	diff := Sub(t, mean)
-	sqDiff := diff.Pow(2)
-	return Mean(sqDiff, axis, keepDims)
-}
-
-
-// adds a scalar value to each element of the tensor.
-func (t *Tensor) AddScalar(scalar float64) *Tensor {
-	outData := make([]float64, len(t.data))
-	for i, v := range t.data {
-		outData[i] = v + scalar
-	}
-	out, _ := NewTensor(t.shape, outData)
-	return out
-}
-
-
-// multiplies each element of the tensor by a scalar value.
-func (t *Tensor) MulScalar(scalar float64) *Tensor {
-	outData := make([]float64, len(t.data))
-	for i, v := range t.data {
-		outData[i] = v * scalar
-	}
-	out, _ := NewTensor(t.shape, outData)
-	return out
-}
-
-
-// subtracts tensor t2 from t1 (element-wise).
-// broadcasting for the case where t1 is a matrix and t2 is a vector (mean).
-func Sub(t1, t2 *Tensor) *Tensor {
-	outData := make([]float64, Numel(t1))
-	d1 := t1.GetData()
-	d2 := t2.GetData()
-
-	s1 := t1.GetShape()
-	s2 := t2.GetShape()
-
-	if IsSameSize(t1, t2) {
-		for i := range d1 {
-			outData[i] = d1[i] - d2[i]
-		}
-	} else if len(s1) == 2 && len(s2) == 2 && s1[0] > 1 && s2[0] == 1 && s1[1] == s2[1] {
-		for i := 0; i < s1[0]; i++ {
-			for j := 0; j < s1[1]; j++ {
-				outData[i*s1[1]+j] = d1[i*s1[1]+j] - d2[j]
-			}
+	if t.RequiresGrad {
+		out.RequiresGrad, out.Parents, out.Operation = true, []*Tensor{t}, "permute"
+		out.BackwardFunc = func(grad *Tensor) {
+			// The inverse of [1,0,2,3] is [1,0,2,3]
+			invAxes := []int{1, 0, 2, 3}
+			g, _ := Permute(grad, invAxes)
+			t.Backward(g)
 		}
 	}
-	out, _ := NewTensor(s1, outData)
-	return out
+	return out, nil
+}
+
+func PrintTensor(t *Tensor) {
+	fmt.Printf("Tensor(shape=%v, data_len=%d, req_grad=%v)\n", t.shape, len(t.data), t.RequiresGrad)
 }

@@ -9,7 +9,7 @@ import (
 // you definitely know RELU if you're reading this: out = max(0, t)
 func RELU(t *tensor.Tensor) (*tensor.Tensor, error) {
 	tData := t.GetData()
-	outData := make([]float64, len(tData))
+	outData := make([]float32, len(tData))
 	for i, v := range tData {
 		if v > 0 {
 			outData[i] = v
@@ -58,9 +58,9 @@ func RELU(t *tensor.Tensor) (*tensor.Tensor, error) {
 // we apply element wise sigmoid : out = 1 / (1 + exp(-t))
 func Sigmoid(t *tensor.Tensor) (*tensor.Tensor, error) {
 	tData := t.GetData()
-	outData := make([]float64, len(tData))
+	outData := make([]float32, len(tData))
 	for i, v := range tData {
-		outData[i] = 1.0 / (1.0 + math.Exp(-v))
+		outData[i] = float32(1.0 / (1.0 + math.Exp(float64(-v))))
 	}
 
 	r, err := tensor.NewTensor(t.GetShape(), outData)
@@ -93,13 +93,12 @@ func Sigmoid(t *tensor.Tensor) (*tensor.Tensor, error) {
 	return r, nil
 }
 
-
 // element wise hyperbolic tangent : out = tanh(t)
 func Tanh(t *tensor.Tensor) (*tensor.Tensor, error) {
 	tData := t.GetData()
-	outData := make([]float64, len(tData))
+	outData := make([]float32, len(tData))
 	for i, v := range tData {
-		outData[i] = math.Tanh(v)
+		outData[i] = float32(math.Tanh(float64(v)))
 	}
 
 	r, err := tensor.NewTensor(t.GetShape(), outData)
@@ -115,7 +114,7 @@ func Tanh(t *tensor.Tensor) (*tensor.Tensor, error) {
 		r.BackwardFunc = func(grad *tensor.Tensor) {
 			if t.RequiresGrad {
 				// Gradient of Tanh is 1 - y^2, where y is the output.
-				gradDataForT := make([]float64, len(grad.GetData()))
+				gradDataForT := make([]float32, len(grad.GetData()))
 				gradData := grad.GetData()
 
 				for i := range gradDataForT {
@@ -139,7 +138,7 @@ func Tanh(t *tensor.Tensor) (*tensor.Tensor, error) {
 // Softmax applies the Softmax function to the flattened tensor.
 func Softmax(t *tensor.Tensor) (*tensor.Tensor, error) {
 	tData := t.GetData()
-	outData := make([]float64, len(tData))
+	outData := make([]float32, len(tData))
 
 	// max for numerical stability (log-sum-exp trick)
 	maxv := tData[0]
@@ -150,9 +149,9 @@ func Softmax(t *tensor.Tensor) (*tensor.Tensor, error) {
 	}
 
 	// compute exp and sum
-	var sum float64
+	var sum float32
 	for i, v := range tData {
-		exp := math.Exp(v - maxv)
+		exp := float32(math.Exp(float64(v - maxv)))
 		outData[i] = exp
 		sum += exp
 	}
@@ -177,11 +176,11 @@ func Softmax(t *tensor.Tensor) (*tensor.Tensor, error) {
 
 		r.BackwardFunc = func(grad *tensor.Tensor) {
 			if t.RequiresGrad {
-				gradDataForT := make([]float64, len(grad.GetData()))
+				gradDataForT := make([]float32, len(grad.GetData()))
 				gradData := grad.GetData()
 				softmaxOutputData := r.GetData()
 
-				dotProduct := 0.0
+				var dotProduct float32 = 0.0
 				if len(gradData) != len(softmaxOutputData) {
 					fmt.Printf("Warning: Softmax backward shape mismatch. grad len: %d, output len: %d\n", len(gradData), len(softmaxOutputData))
 					return

@@ -10,36 +10,32 @@ import (
 	"go-torch/tensor"
 )
 
-
-
-// bench params 
+// bench params
 const (
-	numIterations    = 100 
+	numIterations    = 100
 	smallDim         = 128
 	mediumDim        = 512
 	largeDim         = 1024
 	defaultBatchSize = 32
 )
 
+// utility functions for benchmark creation
 
-// utility functions for benchmark creation 
-
-func generateRandomData(size int) []float64 {
-	data := make([]float64, size)
+func generateRandomData(size int) []float32 {
+	data := make([]float32, size)
 	for i := range data {
-		data[i] = rand.Float64()*2 - 1 
+		data[i] = rand.Float32()*2 - 1
 	}
 	return data
 }
 
-
 // we perform the following dimension-based tasks (for 100 iterations):
-// 1) element wise addition        - 128, 512, 1024 
-// 2) element wise multiplication  - 128, 512, 1024 
-// 3) matrix multiplication        - 128, 512, 1024 
-// 4) relu activation 
+// 1) element wise addition        - 128, 512, 1024
+// 2) element wise multiplication  - 128, 512, 1024
+// 3) matrix multiplication        - 128, 512, 1024
+// 4) relu activation
 
-// all these metrics are calculated as ms (time * 1000). 
+// all these metrics are calculated as ms (time * 1000).
 
 func benchmarkAdd_GoTorch(dim int, iterations int) time.Duration {
 	var totalDuration time.Duration
@@ -119,12 +115,10 @@ func benchmarkReLU_GoTorch(dim int, iterations int) time.Duration {
 	return totalDuration / time.Duration(iterations)
 }
 
-
-
-// we perform the following layer and loss benchmarks 
-// 1) linear layer forward   
-// 2) cross-Entropy Loss     
-// 3) Full-forward Backward  
+// we perform the following layer and loss benchmarks
+// 1) linear layer forward
+// 2) cross-Entropy Loss
+// 3) Full-forward Backward
 
 func benchmarkLinearForward_GoTorch(batchSize, inputDim, outputDim int, iterations int) time.Duration {
 	var totalDuration time.Duration
@@ -201,7 +195,7 @@ func benchmarkForwardBackward_GoTorch(batchSize, inputDim, hiddenDim, outputDim 
 		totalDuration += time.Since(start)
 		// end there timer here
 
-		// zero grads are optional 
+		// zero grads are optional
 		x.ZeroGrad()
 		layer1.ZeroGrad()
 		layer2.ZeroGrad()
@@ -210,7 +204,7 @@ func benchmarkForwardBackward_GoTorch(batchSize, inputDim, hiddenDim, outputDim 
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())  // deprecated but works, ig. you could change it. :)
+	rand.Seed(time.Now().UnixNano()) // deprecated but works, ig. you could change it. :)
 	fmt.Println("--- Go-Torch Benchmarks ---")
 	fmt.Printf("Iterations per benchmark: %d\n\n", numIterations)
 
@@ -227,7 +221,7 @@ func main() {
 	fmt.Println("--- Layer and Loss Benchmarks ---")
 	inputDim := 128
 	hiddenDim := 256
-	outputDim := 10 
+	outputDim := 10
 
 	fmt.Printf("Linear Layer Forward (Batch: %d, In: %d, Out: %d): %v\n",
 		defaultBatchSize, inputDim, outputDim,

@@ -4,29 +4,27 @@ import (
 	"fmt"
 	"go-torch/tensor"
 	"math"
-	"runtime" 
-	"sync"    
+	"runtime"
+	"sync"
 )
-
-
 
 // computes the Cross-Entropy Loss between logits and target labels.
 // it assumes logits is a tensor that can be treated as a flattened 2D structure
 // [batch_size, num_classes], where the last dimension contains class scores.
 // targets are expected to be class indices (0-indexed).
 func CrossEntropyLoss(logits *tensor.Tensor, targets []int) (*tensor.Tensor, error) {
-	
+
 	logitsSize := tensor.Numel(logits)
 	batchSize := len(targets)
 
 	if batchSize == 0 {
 		// loss, gradient = 0, 0
-		zeroLossTensor, err := tensor.NewTensor([]int{1}, []float64{0.0})
+		zeroLossTensor, err := tensor.NewTensor([]int{1}, []float32{0.0})
 		if err != nil {
 			return nil, fmt.Errorf("cross_entropy_loss: failed to create zero loss tensor for empty batch: %w", err)
 		}
 		zeroLossTensor.RequiresGrad = false
-		return zeroLossTensor, nil 
+		return zeroLossTensor, nil
 	}
 
 	// Infer numClasses from logits size and batch size.
@@ -40,16 +38,15 @@ func CrossEntropyLoss(logits *tensor.Tensor, targets []int) (*tensor.Tensor, err
 	}
 
 	logitsData := logits.GetData()
-	probsData := make([]float64, logitsSize) // store probabilities flattened like logits
+	probsData := make([]float32, logitsSize) // store probabilities flattened like logits
 	lossSum := 0.0
-
 
 	// batch-wise softmax and loss is computed here
 	for i := 0; i < batchSize; i++ {
 		startIdx := i * numClasses
 		endIdx := startIdx + numClasses
-		itemLogits := logitsData[startIdx:endIdx] 
-		itemProbs := probsData[startIdx:endIdx]   
+		itemLogits := logitsData[startIdx:endIdx]
+		itemProbs := probsData[startIdx:endIdx]
 
 		// apply Softmax to itemLogits for numerical stability (log-sum-exp)
 		maxv := itemLogits[0]
@@ -60,10 +57,10 @@ func CrossEntropyLoss(logits *tensor.Tensor, targets []int) (*tensor.Tensor, err
 		}
 
 		// math.Exp(v - maxv) is used stable exp calculation. also used in nn/linear.go
-		var sumExp float64
+		var sumExp float32
 		for k, v := range itemLogits {
-			expv := math.Exp(v - maxv)
-			itemProbs[k] = expv        
+			expv := float32(math.Exp(float64(v - maxv)))
+			itemProbs[k] = expv
 			sumExp += expv
 		}
 
@@ -87,16 +84,16 @@ func CrossEntropyLoss(logits *tensor.Tensor, targets []int) (*tensor.Tensor, err
 		// add a small epsilon to prevent log(0) which is -Inf.
 		// using Max(targetProb, 1e-10) is another option, but adding epsilon is also common.
 		// i think the mathematically more robust way is to compute LogSumExp and combine it with the target logit.
-        if targetProb <= 0 { 
-            targetProb = 1e-10 
-        }
+		if targetProb <= 0 {
+			targetProb = 1e-10
+		}
 
-		lossSum -= math.Log(targetProb)
+		lossSum -= math.Log(float64(targetProb))
 	}
 
-	meanLossValue := lossSum / float64(batchSize)
-
-	lossTensor, err := tensor.NewTensor([]int{1}, []float64{meanLossValue})
+	meanLossValue := float32(lossSum / float64(batchSize))
+	
+	lossTensor, err := tensor.NewTensor([]int{1}, []float32{meanLossValue})
 	if err != nil {
 		return nil, fmt.Errorf("cross_entropy_loss: failed to create output tensor for mean loss: %w", err)
 	}
@@ -110,8 +107,8 @@ func CrossEntropyLoss(logits *tensor.Tensor, targets []int) (*tensor.Tensor, err
 	if lossTensor.RequiresGrad {
 		lossTensor.BackwardFunc = func(grad *tensor.Tensor) {
 			if logits.RequiresGrad {
-				gradDataForLogits := make([]float64, logitsSize)
-				scale := 1.0 / float64(batchSize) // Pre-calculate scale
+				gradDataForLogits := make([]float32, logitsSize)
+				scale := 1.0 / float32(batchSize) // Pre-calculate scale
 
 				// Parallelize the gradient calculation across the batch
 				numGoroutines := runtime.NumCPU()
@@ -120,8 +117,12 @@ func CrossEntropyLoss(logits *tensor.Tensor, targets []int) (*tensor.Tensor, err
 
 				for i := 0; i < numGoroutines; i++ {
 					startBatch, endBatch := i*jobsPerGo, (i+1)*jobsPerGo
-					if endBatch > batchSize { endBatch = batchSize }
-					if startBatch >= endBatch { continue }
+					if endBatch > batchSize {
+						endBatch = batchSize
+					}
+					if startBatch >= endBatch {
+						continue
+					}
 
 					wg.Add(1)
 					go func(sB, eB int) {
@@ -142,7 +143,7 @@ func CrossEntropyLoss(logits *tensor.Tensor, targets []int) (*tensor.Tensor, err
 				}
 				wg.Wait()
 
-				gradTensorForLogits, err := tensor.NewTensor(logits.GetShape(), gradDataForLogits) 
+				gradTensorForLogits, err := tensor.NewTensor(logits.GetShape(), gradDataForLogits)
 				if err != nil {
 					fmt.Printf("Warning: Failed to create gradient tensor for logits in CrossEntropyLoss backward: %v\n", err)
 					return

@@ -14,13 +14,10 @@ type MaxPooling2D struct {
 	Stride     int
 }
 
-
-// returns a new MaxPooling layer 
+// returns a new MaxPooling layer
 func NewMaxPooling2D(kernelSize, stride int) *MaxPooling2D {
 	return &MaxPooling2D{KernelSize: kernelSize, Stride: stride}
 }
-
-
 
 func (p *MaxPooling2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	inputShape := input.GetShape()
@@ -29,16 +26,16 @@ func (p *MaxPooling2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	}
 	b, c, h, w := inputShape[0], inputShape[1], inputShape[2], inputShape[3]
 
-	outH := (h - p.KernelSize)/p.Stride + 1
-	outW := (w - p.KernelSize)/p.Stride + 1
+	outH := (h-p.KernelSize)/p.Stride + 1
+	outW := (w-p.KernelSize)/p.Stride + 1
 	outShape := []int{b, c, outH, outW}
-	outData := make([]float64, b*c*outH*outW)
+	outData := make([]float32, b*c*outH*outW)
 	maxIndices := make([]int, len(outData))
 	inputData := input.GetData()
 
 	numGoroutines := runtime.NumCPU()
 	var wg sync.WaitGroup
-	
+
 	totalJobs := b * c
 	jobsPerGo := (totalJobs + numGoroutines - 1) / numGoroutines
 
@@ -60,7 +57,7 @@ func (p *MaxPooling2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 				j := job % c
 				for k := 0; k < outH; k++ {
 					for l := 0; l < outW; l++ {
-						maxVal := -math.MaxFloat64
+						maxVal := -float32(math.MaxFloat32)
 						maxIndex := -1
 						hStart, wStart := k*p.Stride, l*p.Stride
 						for y := 0; y < p.KernelSize; y++ {
@@ -84,7 +81,9 @@ func (p *MaxPooling2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	wg.Wait()
 
 	output, err := tensor.NewTensor(outShape, outData)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	if input.RequiresGrad {
 		output.RequiresGrad = true
@@ -92,7 +91,7 @@ func (p *MaxPooling2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 		output.Operation = "maxpool"
 		output.BackwardFunc = func(grad *tensor.Tensor) {
 			if input.RequiresGrad {
-				gradInputData := make([]float64, tensor.Numel(input))
+				gradInputData := make([]float32, tensor.Numel(input))
 				gradOutputData := grad.GetData()
 				for i, g := range gradOutputData {
 					idx := maxIndices[i]
@@ -106,10 +105,9 @@ func (p *MaxPooling2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	return output, nil
 }
 
-
-// we don't need to zero out any grad, since MaxPooling doesn't need any learnable parameters 
+// we don't need to zero out any grad, since MaxPooling doesn't need any learnable parameters
 func (p *MaxPooling2D) Parameters() []*tensor.Tensor { return []*tensor.Tensor{} }
-func (p *MaxPooling2D) ZeroGrad() {}
+func (p *MaxPooling2D) ZeroGrad()                    {}
 
 func (p *MaxPooling2D) Name() string {
 	return "MaxPooling2D"

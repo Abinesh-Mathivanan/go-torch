@@ -27,20 +27,28 @@ type SimpleCNN struct {
 // NewSimpleCNN creates and initializes a new CNN model.
 func NewSimpleCNN(numClasses int) (*SimpleCNN, error) {
 	conv1, err := nn.NewConv2D(1, 16, 5, 1, 2) // In: 1x28x28, Out: 16x28x28
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	pool1 := nn.NewMaxPooling2D(2, 2) // Out: 16x14x14
 
 	conv2, err := nn.NewConv2D(16, 32, 5, 1, 2) // In: 16x14x14, Out: 32x14x14
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	pool2 := nn.NewMaxPooling2D(2, 2) // Out: 32x7x7
 
 	flatten := nn.NewFlatten() // Out: 32*7*7 = 1568 features
 
 	linear1, err := nn.NewLinear(32*7*7, 128)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	linear2, err := nn.NewLinear(128, numClasses)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	return &SimpleCNN{
 		Conv1:   conv1,
@@ -57,29 +65,49 @@ func NewSimpleCNN(numClasses int) (*SimpleCNN, error) {
 func (m *SimpleCNN) Forward(x *tensor.Tensor) (*tensor.Tensor, error) {
 	var err error
 	x, err = m.Conv1.Forward(x)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	x, err = nn.RELU(x)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	x, err = m.Pool1.Forward(x)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	x, err = m.Conv2.Forward(x)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	x, err = nn.RELU(x)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	x, err = m.Pool2.Forward(x)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	x, err = m.Flatten.Forward(x)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	x, err = m.Linear1.Forward(x)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	x, err = nn.RELU(x)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	logits, err := m.Linear2.Forward(x)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	return logits, nil
 }
@@ -108,9 +136,11 @@ func tensorDemo() {
 	fmt.Println("--> tensor test")
 
 	shapeA := []int{2, 2}
-	dataA := []float64{1, 2, 3, 4}
+	dataA := []float32{1, 2, 3, 4}
 	tensorA, err := tensor.NewTensor(shapeA, dataA)
-	if err != nil { log.Fatalf("Error creating tensorA: %v", err) }
+	if err != nil {
+		log.Fatalf("Error creating tensorA: %v", err)
+	}
 	tensor.PrintTensor(tensorA)
 	fmt.Printf("TensorA Data: %v, Shape: %v, Numel: %d\n", tensorA.GetData(), tensorA.GetShape(), tensor.Numel(tensorA))
 
@@ -119,60 +149,82 @@ func tensorDemo() {
 	fmt.Println("Is tensorA same size as tensorAClone?", tensor.IsSameSize(tensorA, tensorAClone))
 
 	onesTensor, err := tensor.OnesLike(tensorA)
-	if err != nil { log.Fatalf("Error creating onesTensor: %v", err) }
+	if err != nil {
+		log.Fatalf("Error creating onesTensor: %v", err)
+	}
 	fmt.Print("OnesLike(tensorA): ")
 	tensor.PrintTensor(onesTensor)
 
 	shapeB := []int{2, 2}
-	dataB := []float64{5, 6, 7, 8}
+	dataB := []float32{5, 6, 7, 8}
 	tensorB, err := tensor.NewTensor(shapeB, dataB)
-	if err != nil { log.Fatalf("Error creating tensorB: %v", err) }
+	if err != nil {
+		log.Fatalf("Error creating tensorB: %v", err)
+	}
 
 	sumTensor, err := tensor.AddTensor(tensorA, tensorB)
-	if err != nil { log.Fatalf("Error adding tensors: %v", err) }
+	if err != nil {
+		log.Fatalf("Error adding tensors: %v", err)
+	}
 	fmt.Print("Sum (A+B): ")
 	tensor.PrintTensor(sumTensor)
 
 	prodTensor, err := tensor.MulTensor(tensorA, tensorB)
-	if err != nil { log.Fatalf("Error multiplying tensors: %v", err) }
+	if err != nil {
+		log.Fatalf("Error multiplying tensors: %v", err)
+	}
 	fmt.Print("Product (A*B element-wise): ")
 	tensor.PrintTensor(prodTensor)
 
 	reshapedSum, err := tensor.Reshape(sumTensor, []int{4, 1})
-	if err != nil { log.Fatalf("Error reshaping tensor: %v", err) }
+	if err != nil {
+		log.Fatalf("Error reshaping tensor: %v", err)
+	}
 	fmt.Print("Reshaped Sum: ")
 	tensor.PrintTensor(reshapedSum)
 }
 
 func activationDemo() {
 	fmt.Println("\n--> activation functions")
-	dataActivation := []float64{-2.0, -0.5, 0.0, 0.5, 2.0}
+	dataActivation := []float32{-2.0, -0.5, 0.0, 0.5, 2.0}
 	tensorActivationInput, err := tensor.NewTensor([]int{1, 5}, dataActivation)
-	if err != nil { log.Fatalf("Error creating tensorActivationInput: %v", err) }
+	if err != nil {
+		log.Fatalf("Error creating tensorActivationInput: %v", err)
+	}
 	tensor.PrintTensor(tensorActivationInput)
 
 	reluOut, err := nn.RELU(tensorActivationInput)
-	if err != nil { log.Fatalf("Error in RELU: %v", err) }
+	if err != nil {
+		log.Fatalf("Error in RELU: %v", err)
+	}
 	fmt.Print("RELU Output: ")
 	tensor.PrintTensor(reluOut)
 
 	sigmoidOut, err := nn.Sigmoid(tensorActivationInput)
-	if err != nil { log.Fatalf("Error in Sigmoid: %v", err) }
+	if err != nil {
+		log.Fatalf("Error in Sigmoid: %v", err)
+	}
 	fmt.Print("Sigmoid Output: ")
 	tensor.PrintTensor(sigmoidOut)
 
 	tanhOut, err := nn.Tanh(tensorActivationInput)
-	if err != nil { log.Fatalf("Error in Tanh: %v", err) }
+	if err != nil {
+		log.Fatalf("Error in Tanh: %v", err)
+	}
 	fmt.Print("Tanh Output: ")
 	tensor.PrintTensor(tanhOut)
 
-	softmaxInputData := []float64{1.0, 2.0, 0.5}
+	softmaxInputData := []float32{1.0, 2.0, 0.5}
 	softmaxInput, err := tensor.NewTensor([]int{1, 3}, softmaxInputData)
-	if err != nil { log.Fatalf("Error creating softmaxInput: %v", err) }
+	if err != nil {
+		log.Fatalf("Error creating softmaxInput: %v", err)
+	}
 	fmt.Print("Softmax Input: ")
 	tensor.PrintTensor(softmaxInput)
 	softmaxOut, err := nn.Softmax(softmaxInput)
-	if err != nil { log.Fatalf("Error in Softmax: %v", err) }
+	if err != nil {
+		log.Fatalf("Error in Softmax: %v", err)
+	}
 	fmt.Print("Softmax Output: ")
 	tensor.PrintTensor(softmaxOut)
 }
@@ -180,80 +232,111 @@ func activationDemo() {
 func linearAutogradDemo() {
 	fmt.Println("\n--- Linear Layer, Loss, and Autograd Demo ---")
 	inputDim, outputDim, batchSize := 2, 3, 1
-	inputData := []float64{0.5, -0.2}
+	inputData := []float32{0.5, -0.2}
 	x, err := tensor.NewTensor([]int{batchSize, inputDim}, inputData)
-	if err != nil { log.Fatalf("Error creating input x: %v", err) }
+	if err != nil {
+		log.Fatalf("Error creating input x: %v", err)
+	}
 	x.RequiresGrad = true
-	fmt.Print("Input x: "); tensor.PrintTensor(x)
+	fmt.Print("Input x: ")
+	tensor.PrintTensor(x)
 
 	linearLayer, err := nn.NewLinear(inputDim, outputDim)
-	if err != nil { log.Fatalf("Error creating linear layer: %v", err) }
+	if err != nil {
+		log.Fatalf("Error creating linear layer: %v", err)
+	}
 
 	linearOut, err := linearLayer.Forward(x)
-	if err != nil { log.Fatalf("Error in linear layer forward pass: %v", err) }
-	
+	if err != nil {
+		log.Fatalf("Error in linear layer forward pass: %v", err)
+	}
+
 	activatedOut, err := nn.RELU(linearOut)
-	if err != nil { log.Fatalf("Error in RELU after linear layer: %v", err) }
-	
+	if err != nil {
+		log.Fatalf("Error in RELU after linear layer: %v", err)
+	}
+
 	targets := []int{1}
 	loss, err := nn.CrossEntropyLoss(activatedOut, targets)
-	if err != nil { log.Fatalf("Error calculating cross entropy loss: %v", err) }
-	fmt.Print("Loss: "); tensor.PrintTensor(loss)
+	if err != nil {
+		log.Fatalf("Error calculating cross entropy loss: %v", err)
+	}
+	fmt.Print("Loss: ")
+	tensor.PrintTensor(loss)
 
-	fmt.Println("\nPerforming Backward Pass..."); loss.Backward(nil)
+	fmt.Println("\nPerforming Backward Pass...")
+	loss.Backward(nil)
 
 	fmt.Println("\nGradients after backward pass:")
-	fmt.Print("Gradient for input x: "); tensor.PrintTensor(x)
-	fmt.Println("Gradients for Linear Layer Parameters:");
+	fmt.Print("Gradient for input x: ")
+	tensor.PrintTensor(x)
+	fmt.Println("Gradients for Linear Layer Parameters:")
 	for _, p := range linearLayer.Parameters() {
 		tensor.PrintTensor(p)
 	}
 
-	fmt.Println("\nZeroing Gradients..."); linearLayer.ZeroGrad()
+	fmt.Println("\nZeroing Gradients...")
+	linearLayer.ZeroGrad()
 }
 
 func optimizerDemo() {
 	fmt.Println("\n--> optimizer test")
 	inputDim, hiddenDim, outputDim := 2, 3, 1
-	inputData := []float64{0.8, -0.5}
+	inputData := []float32{0.8, -0.5}
 	x, err := tensor.NewTensor([]int{1, inputDim}, inputData)
-	if err != nil { log.Fatalf("Error creating input x: %v", err) }
+	if err != nil {
+		log.Fatalf("Error creating input x: %v", err)
+	}
 	x.RequiresGrad = true
 
-	layer1, err := nn.NewLinear(inputDim, hiddenDim); if err != nil { log.Fatalf("Error creating layer1: %v", err) }
-	layer2, err := nn.NewLinear(hiddenDim, outputDim); if err != nil { log.Fatalf("Error creating layer2: %v", err) }
-	
+	layer1, err := nn.NewLinear(inputDim, hiddenDim)
+	if err != nil {
+		log.Fatalf("Error creating layer1: %v", err)
+	}
+	layer2, err := nn.NewLinear(hiddenDim, outputDim)
+	if err != nil {
+		log.Fatalf("Error creating layer2: %v", err)
+	}
+
 	var allParams []*tensor.Tensor
 	allParams = append(allParams, layer1.Parameters()...)
 	allParams = append(allParams, layer2.Parameters()...)
 
-	learningRate := 0.1
+	learningRate := float32(0.1)
 	sgdOptimizer, err := optimizer.NewSGD(allParams, learningRate, 0.0)
-	if err != nil { log.Fatalf("Error creating SGD optimizer: %v", err) }
-	
+	if err != nil {
+		log.Fatalf("Error creating SGD optimizer: %v", err)
+	}
+
 	fmt.Println("\n--- Before Optimization Step ---")
-	fmt.Println("Layer 1 Weight: "); tensor.PrintTensor(layer1.Parameters()[0])
+	fmt.Println("Layer 1 Weight: ")
+	tensor.PrintTensor(layer1.Parameters()[0])
 
 	sgdOptimizer.ZeroGrad()
 	h, _ := layer1.Forward(x)
 	logits, _ := layer2.Forward(h)
 	targets := []int{0}
 	loss, _ := nn.CrossEntropyLoss(logits, targets)
-	
+
 	loss.Backward(nil)
-	
+
 	err = sgdOptimizer.Step()
-	if err != nil { log.Fatalf("Error during optimizer step: %v", err) }
+	if err != nil {
+		log.Fatalf("Error during optimizer step: %v", err)
+	}
 
 	fmt.Println("\n--- After Optimization Step ---")
-	fmt.Println("Layer 1 Weight (After Update): "); tensor.PrintTensor(layer1.Parameters()[0])
+	fmt.Println("Layer 1 Weight (After Update): ")
+	tensor.PrintTensor(layer1.Parameters()[0])
 }
 
 func cnnDemo() {
 	fmt.Println("\n--- CNN Full Forward & Backward Demo ---")
 
 	model, err := NewSimpleCNN(10)
-	if err != nil { log.Fatalf("Error creating model: %v", err) }
+	if err != nil {
+		log.Fatalf("Error creating model: %v", err)
+	}
 
 	batchSize := 2
 	inputShape := []int{batchSize, 1, 28, 28}
@@ -263,10 +346,10 @@ func cnnDemo() {
 	for _, dim := range inputShape {
 		numElements *= dim
 	}
-	inputData := make([]float64, numElements)
+	inputData := make([]float32, numElements)
 
 	for i := range inputData {
-		inputData[i] = rand.Float64()
+		inputData[i] = rand.Float32()
 	}
 	input, _ := tensor.NewTensor(inputShape, inputData)
 	input.RequiresGrad = true
@@ -276,14 +359,21 @@ func cnnDemo() {
 
 	fmt.Println("Running forward pass...")
 	logits, err := model.Forward(input)
-	if err != nil { log.Fatalf("Forward pass failed: %v", err) }
-	fmt.Println("Logits (model output):"); tensor.PrintTensor(logits)
+	if err != nil {
+		log.Fatalf("Forward pass failed: %v", err)
+	}
+	fmt.Println("Logits (model output):")
+	tensor.PrintTensor(logits)
 
 	loss, err := nn.CrossEntropyLoss(logits, targets)
-	if err != nil { log.Fatalf("Loss calculation failed: %v", err) }
-	fmt.Println("\nLoss:"); tensor.PrintTensor(loss)
+	if err != nil {
+		log.Fatalf("Loss calculation failed: %v", err)
+	}
+	fmt.Println("\nLoss:")
+	tensor.PrintTensor(loss)
 
-	fmt.Println("\nRunning backward pass..."); loss.Backward(nil)
+	fmt.Println("\nRunning backward pass...")
+	loss.Backward(nil)
 	fmt.Println("Backward pass complete.")
 
 	fmt.Println("\nVerifying gradients were computed...")
@@ -307,14 +397,12 @@ func cnnDemo() {
 		}
 	}
 
-
 	if input.Grad != nil {
 		fmt.Printf("Gradient computed for input tensor, shape: %v\n", input.Grad.GetShape())
 	} else {
 		fmt.Println("Gradient for input tensor is NIL.")
 	}
 }
-
 
 func main() {
 	rand.Seed(time.Now().UnixNano())

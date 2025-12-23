@@ -2,20 +2,16 @@ package nn
 
 import (
 	"fmt"
+	"go-torch/tensor"
 	"math/rand"
 	"time"
-	"go-torch/tensor"
 )
-
 
 // linear dense layer: output = input @ weight + bias
 type Linear struct {
 	weight *tensor.Tensor // Shape: [inputDimensions, outputDimensions]
-	bias   *tensor.Tensor   // Shape: [outputDimensions]
+	bias   *tensor.Tensor // Shape: [outputDimensions]
 }
-
-
-
 
 // NewLinear creates a new Linear layer with randomly initialized weights and biases.
 // The weights and biases are set to RequireGrad=true by default as they are parameters.
@@ -27,14 +23,14 @@ func NewLinear(inputDimensions, outputDimensions int) (*Linear, error) {
 	random := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	//TODO: simple random initialization for now, consider scaling the weight assignment.
-	weightData := make([]float64, inputDimensions*outputDimensions)
+	weightData := make([]float32, inputDimensions*outputDimensions)
 	for i := range weightData {
-		weightData[i] = 2*random.Float64() - 1
+		weightData[i] = 2*random.Float32() - 1
 	}
 
-	biasData := make([]float64, outputDimensions)
+	biasData := make([]float32, outputDimensions)
 	for i := range biasData {
-		biasData[i] = 2*random.Float64() - 1 
+		biasData[i] = 2*random.Float32() - 1
 	}
 
 	weights, err := tensor.NewTensor([]int{inputDimensions, outputDimensions}, weightData)
@@ -51,12 +47,8 @@ func NewLinear(inputDimensions, outputDimensions int) (*Linear, error) {
 	// Biases are parameters, they require gradients by default
 	bias.RequiresGrad = true
 
-
 	return &Linear{weight: weights, bias: bias}, nil
 }
-
-
-
 
 // Forward performs the forward pass of the Linear layer, with input and output tensor of shape [batch_size, input_dimensions].
 func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
@@ -96,29 +88,26 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	return output, nil
 }
 
-
 // Parameters() returns the list of parameters in the layer that require gradients. i feed this for optimizers.
 func (l *Linear) Parameters() []*tensor.Tensor {
-    params := []*tensor.Tensor{}
-    if l.weight != nil && l.weight.RequiresGrad {
-        params = append(params, l.weight)
-    }
-     if l.bias != nil && l.bias.RequiresGrad {
-        params = append(params, l.bias)
-    }
-    return params
+	params := []*tensor.Tensor{}
+	if l.weight != nil && l.weight.RequiresGrad {
+		params = append(params, l.weight)
+	}
+	if l.bias != nil && l.bias.RequiresGrad {
+		params = append(params, l.bias)
+	}
+	return params
 }
-
-
 
 // ZeroGrad() calls ZeroGrad() on all parameters in the layer.
 func (l *Linear) ZeroGrad() {
-     if l.weight != nil {
-        l.weight.ZeroGrad()
-     }
-     if l.bias != nil {
-        l.bias.ZeroGrad()
-     }
+	if l.weight != nil {
+		l.weight.ZeroGrad()
+	}
+	if l.bias != nil {
+		l.bias.ZeroGrad()
+	}
 }
 
 func (l *Linear) Name() string {

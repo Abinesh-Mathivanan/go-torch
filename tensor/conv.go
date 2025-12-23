@@ -6,8 +6,6 @@ import (
 	"sync"
 )
 
-
-
 // Im2Col converts image-like data into a column matrix.
 // i used core-parallelization over the batch dimension for performance.
 func Im2Col(input *Tensor, kernelHeight, kernelWidth, stride, padding int) (*Tensor, error) {
@@ -17,8 +15,8 @@ func Im2Col(input *Tensor, kernelHeight, kernelWidth, stride, padding int) (*Ten
 	shape := input.GetShape()
 	batchSize, channels, height, width := shape[0], shape[1], shape[2], shape[3]
 
-	outHeight := (height + 2*padding - kernelHeight)/stride + 1
-	outWidth := (width + 2*padding - kernelWidth)/stride + 1
+	outHeight := (height+2*padding-kernelHeight)/stride + 1
+	outWidth := (width+2*padding-kernelWidth)/stride + 1
 	if outHeight <= 0 || outWidth <= 0 {
 		return nil, fmt.Errorf("convolution produces invalid output size: %dx%d", outHeight, outWidth)
 	}
@@ -26,7 +24,7 @@ func Im2Col(input *Tensor, kernelHeight, kernelWidth, stride, padding int) (*Ten
 	kernelSize := channels * kernelHeight * kernelWidth
 	outputCols := outHeight * outWidth
 	colMatrixShape := []int{kernelSize, batchSize * outputCols}
-	colMatrixData := make([]float64, colMatrixShape[0]*colMatrixShape[1])
+	colMatrixData := make([]float32, colMatrixShape[0]*colMatrixShape[1])
 
 	inputData := input.GetData()
 	numGoroutines := runtime.NumCPU()
@@ -84,8 +82,6 @@ func Im2Col(input *Tensor, kernelHeight, kernelWidth, stride, padding int) (*Ten
 	return colMatrix, nil
 }
 
-
-
 // Col2Im converts a column matrix back into image-like data.
 // It is used in the backward pass of a convolution.
 func Col2Im(cols *Tensor, inputShape []int, kernelHeight, kernelWidth, stride, padding int) (*Tensor, error) {
@@ -94,16 +90,16 @@ func Col2Im(cols *Tensor, inputShape []int, kernelHeight, kernelWidth, stride, p
 	}
 	batchSize, channels, height, width := inputShape[0], inputShape[1], inputShape[2], inputShape[3]
 
-	outHeight := (height + 2*padding - kernelHeight)/stride + 1
-	outWidth := (width + 2*padding - kernelWidth)/stride + 1
+	outHeight := (height+2*padding-kernelHeight)/stride + 1
+	outWidth := (width+2*padding-kernelWidth)/stride + 1
 
-	imgData := make([]float64, batchSize*channels*height*width)
+	imgData := make([]float32, batchSize*channels*height*width)
 	colsData := cols.GetData()
 	colsShape := cols.GetShape()
 
 	numGoroutines := runtime.NumCPU()
 	var wg sync.WaitGroup
-	
+
 	totalJobs := batchSize * channels
 	jobsPerGo := (totalJobs + numGoroutines - 1) / numGoroutines
 
