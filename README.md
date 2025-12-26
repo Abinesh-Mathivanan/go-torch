@@ -1,3 +1,35 @@
+
+<div align="right">
+  <details>
+    <summary >🌐 Language</summary>
+    <div>
+      <div align="center">
+        <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=en">English</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=zh-CN">简体中文</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=zh-TW">繁體中文</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=ja">日本語</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=ko">한국어</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=hi">हिन्दी</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=th">ไทย</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=fr">Français</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=de">Deutsch</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=es">Español</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=it">Italiano</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=ru">Русский</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=pt">Português</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=nl">Nederlands</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=pl">Polski</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=ar">العربية</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=fa">فارسی</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=tr">Türkçe</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=vi">Tiếng Việt</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=id">Bahasa Indonesia</a>
+        | <a href="https://openaitx.github.io/view.html?user=Abinesh-Mathivanan&project=go-torch&lang=as">অসমীয়া</
+      </div>
+    </div>
+  </details>
+</div>
+
 # go-torch 
 
 go-torch is an open-source deep learning framework built from the ground up in pure Go. It provides a modular, PyTorch-like API for building and training neural networks with a stable auto-differentiation engine.
