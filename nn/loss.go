@@ -113,34 +113,43 @@ func CrossEntropyLoss(logits *tensor.Tensor, targets []int) (*tensor.Tensor, err
 				gradDataForLogits := make([]float64, logitsSize)
 				scale := 1.0 / float64(batchSize) // Pre-calculate scale
 
-				// Parallelize the gradient calculation across the batch
-				numGoroutines := runtime.NumCPU()
-				jobsPerGo := (batchSize + numGoroutines - 1) / numGoroutines
-				var wg sync.WaitGroup
+				fillItem := func(item int) {
+					startIdx := item * numClasses
+					targetIndex := targets[item]
 
-				for i := 0; i < numGoroutines; i++ {
-					startBatch, endBatch := i*jobsPerGo, (i+1)*jobsPerGo
-					if endBatch > batchSize { endBatch = batchSize }
-					if startBatch >= endBatch { continue }
-
-					wg.Add(1)
-					go func(sB, eB int) {
-						defer wg.Done()
-						for item := sB; item < eB; item++ {
-							startIdx := item * numClasses
-							targetIndex := targets[item]
-
-							for j := 0; j < numClasses; j++ {
-								gradVal := probsData[startIdx+j]
-								if j == targetIndex {
-									gradVal -= 1.0
-								}
-								gradDataForLogits[startIdx+j] = gradVal * scale
-							}
+					for j := 0; j < numClasses; j++ {
+						gradVal := probsData[startIdx+j]
+						if j == targetIndex {
+							gradVal -= 1.0
 						}
-					}(startBatch, endBatch)
+						gradDataForLogits[startIdx+j] = gradVal * scale
+					}
 				}
-				wg.Wait()
+
+				if !tensor.ShouldParallelize(logitsSize) {
+					for item := 0; item < batchSize; item++ {
+						fillItem(item)
+					}
+				} else {
+					numGoroutines := runtime.NumCPU()
+					jobsPerGo := (batchSize + numGoroutines - 1) / numGoroutines
+					var wg sync.WaitGroup
+
+					for i := 0; i < numGoroutines; i++ {
+						startBatch, endBatch := i*jobsPerGo, (i+1)*jobsPerGo
+						if endBatch > batchSize { endBatch = batchSize }
+						if startBatch >= endBatch { continue }
+
+						wg.Add(1)
+						go func(sB, eB int) {
+							defer wg.Done()
+							for item := sB; item < eB; item++ {
+								fillItem(item)
+							}
+						}(startBatch, endBatch)
+					}
+					wg.Wait()
+				}
 
 				gradTensorForLogits, err := tensor.NewTensor(logits.GetShape(), gradDataForLogits) 
 				if err != nil {

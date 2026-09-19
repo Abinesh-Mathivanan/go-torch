@@ -10,10 +10,6 @@ import (
 // and have RequiresGrad set to true.
 // it uses a topological sort of the graph defined by tensor.Tensor.Parents.
 
-// currently, the main.go uses the backward pass from tensor/tensor.go and works fine
-// i implemented this to rewrite in future and to experiment some things 
-// TODO: rewrite tensor/tensor.go and implement the autograd functionality here. add new ideas. 
-
 func Backward(root *tensor.Tensor) {
 	if !root.RequiresGrad {
 		return

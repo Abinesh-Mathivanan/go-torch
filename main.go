@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+	"go-torch/autograd"
 	"go-torch/nn"
 	"go-torch/optimizer"
 	"go-torch/tensor"
@@ -200,7 +201,11 @@ func linearAutogradDemo() {
 	if err != nil { log.Fatalf("Error calculating cross entropy loss: %v", err) }
 	fmt.Print("Loss: "); tensor.PrintTensor(loss)
 
-	fmt.Println("\nPerforming Backward Pass..."); loss.Backward(nil)
+	// NOTE: loss.Backward(nil) (the Tensor method) only accumulates a gradient
+	// into loss.Grad - it does NOT walk the graph or invoke BackwardFunc on
+	// any parent. Use the autograd package's topological Backward() to
+	// actually propagate gradients through the network.
+	fmt.Println("\nPerforming Backward Pass..."); autograd.Backward(loss)
 
 	fmt.Println("\nGradients after backward pass:")
 	fmt.Print("Gradient for input x: "); tensor.PrintTensor(x)
@@ -240,7 +245,7 @@ func optimizerDemo() {
 	targets := []int{0}
 	loss, _ := nn.CrossEntropyLoss(logits, targets)
 	
-	loss.Backward(nil)
+	autograd.Backward(loss)
 	
 	err = sgdOptimizer.Step()
 	if err != nil { log.Fatalf("Error during optimizer step: %v", err) }
@@ -283,7 +288,7 @@ func cnnDemo() {
 	if err != nil { log.Fatalf("Loss calculation failed: %v", err) }
 	fmt.Println("\nLoss:"); tensor.PrintTensor(loss)
 
-	fmt.Println("\nRunning backward pass..."); loss.Backward(nil)
+	fmt.Println("\nRunning backward pass..."); autograd.Backward(loss)
 	fmt.Println("Backward pass complete.")
 
 	fmt.Println("\nVerifying gradients were computed...")

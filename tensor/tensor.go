@@ -2,7 +2,9 @@ package tensor
 
 import (
 	"fmt"
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"math"
 	"bytes" 
@@ -209,6 +211,36 @@ func MulTensor(t1 *Tensor, t2 *Tensor) (*Tensor, error) {
 		out.Operation = "mul"
 
 		out.BackwardFunc = func(grad *Tensor) {
+			gradData := grad.GetData()
+
+			if !ShouldParallelize(len(gradData)) {
+				// Sequential path: avoids goroutine spawn/sync overhead for
+				// small tensors - this is the common case for RNN/LSTM gate
+				// computations, which call MulTensor once per timestep on
+				// tensors with only a few hundred elements.
+				if t1.RequiresGrad {
+					if t1.Grad == nil {
+						t1.ZeroGrad()
+					}
+					t1GradData := t1.Grad.GetData()
+					t2Data := t2.GetData()
+					for j := range gradData {
+						t1GradData[j] += gradData[j] * t2Data[j]
+					}
+				}
+				if t2.RequiresGrad {
+					if t2.Grad == nil {
+						t2.ZeroGrad()
+					}
+					t2GradData := t2.Grad.GetData()
+					t1Data := t1.GetData()
+					for j := range gradData {
+						t2GradData[j] += gradData[j] * t1Data[j]
+					}
+				}
+				return
+			}
+
 			var wg sync.WaitGroup
 			numGoroutines := runtime.NumCPU()
 			jobsPerGo := (len(grad.data) + numGoroutines - 1) / numGoroutines
@@ -396,8 +428,9 @@ func (t *Tensor) Backward(grad *Tensor) {
 		return
 	}
 
-	// This function is now ONLY a gradient accumulator.
-	// The autograd engine is responsible for calling t.BackwardFunc.
+	// This function is now only a gradient accumulator.
+	// The autograd engine (autograd.Backward) is responsible for calling
+	// t.BackwardFunc in topological order.
 
 	if grad == nil {
 		// This should ideally not be hit if using the autograd engine,
@@ -483,7 +516,28 @@ func Transpose(t *Tensor) (*Tensor, error) {
 	return out, nil
 }
 
-const blasThreshold = 64 
+const blasThreshold = 64
+
+var parallelWorkThreshold = func() int {
+	const defaultThreshold = 4096
+	v, ok := os.LookupEnv("GOTORCH_PARALLEL_THRESHOLD")
+	if !ok {
+		return defaultThreshold
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: invalid GOTORCH_PARALLEL_THRESHOLD=%q, using default %d: %v\n", v, defaultThreshold, err)
+		return defaultThreshold
+	}
+	return n
+}()
+
+// ShouldParallelize reports whether a workload of the given size is large
+// enough to be worth splitting across goroutines. Exported so nn/ ops can
+// share the same policy instead of every file guessing its own constant.
+func ShouldParallelize(work int) bool {
+	return work > parallelWorkThreshold
+}
 
 
 func matMulWithTranspose(t1, t2 *Tensor, transposeT1, transposeT2 bool) (*Tensor, error) {
@@ -724,64 +778,90 @@ func AddTensorBroadcast(a *Tensor, b *Tensor) (*Tensor, error) {
 	// 4D Conv2D case
 	if len(aShape) == 4 && len(bShape) == 1 && aShape[1] == bShape[0] {
 		B, C, H, W := aShape[0], aShape[1], aShape[2], aShape[3]
-		numGoroutines := runtime.NumCPU()
-		var wg sync.WaitGroup
-		batchesPerGo := (B + numGoroutines - 1) / numGoroutines
-		for i := 0; i < numGoroutines; i++ {
-			startBatch := i * batchesPerGo
-			endBatch := (i + 1) * batchesPerGo
-			if endBatch > B {
-				endBatch = B
-			}
-			if startBatch >= endBatch {
-				continue
-			}
 
-			wg.Add(1)
-			go func(sB, eB int) {
-				defer wg.Done()
-				for b_idx := sB; b_idx < eB; b_idx++ {
-					for c_idx := 0; c_idx < C; c_idx++ {
-						biasVal := bData[c_idx]
-						offset := b_idx*(C*H*W) + c_idx*(H*W)
-						for i := 0; i < H*W; i++ {
-							idx := offset + i
-							outData[idx] = aData[idx] + biasVal
-						}
+		if !ShouldParallelize(len(aData)) {
+			for b_idx := 0; b_idx < B; b_idx++ {
+				for c_idx := 0; c_idx < C; c_idx++ {
+					biasVal := bData[c_idx]
+					offset := b_idx*(C*H*W) + c_idx*(H*W)
+					for i := 0; i < H*W; i++ {
+						idx := offset + i
+						outData[idx] = aData[idx] + biasVal
 					}
 				}
-			}(startBatch, endBatch)
+			}
+		} else {
+			numGoroutines := runtime.NumCPU()
+			var wg sync.WaitGroup
+			batchesPerGo := (B + numGoroutines - 1) / numGoroutines
+			for i := 0; i < numGoroutines; i++ {
+				startBatch := i * batchesPerGo
+				endBatch := (i + 1) * batchesPerGo
+				if endBatch > B {
+					endBatch = B
+				}
+				if startBatch >= endBatch {
+					continue
+				}
+
+				wg.Add(1)
+				go func(sB, eB int) {
+					defer wg.Done()
+					for b_idx := sB; b_idx < eB; b_idx++ {
+						for c_idx := 0; c_idx < C; c_idx++ {
+							biasVal := bData[c_idx]
+							offset := b_idx*(C*H*W) + c_idx*(H*W)
+							for i := 0; i < H*W; i++ {
+								idx := offset + i
+								outData[idx] = aData[idx] + biasVal
+							}
+						}
+					}
+				}(startBatch, endBatch)
+			}
+			wg.Wait()
 		}
-		wg.Wait()
 
 		// 2D Linear layer case
 	} else if len(aShape) == 2 && len(bShape) == 1 && aShape[1] == bShape[0] {
 		B, F := aShape[0], aShape[1]
-		numGoroutines := runtime.NumCPU()
-		var wg sync.WaitGroup
-		rowsPerGo := (B + numGoroutines - 1) / numGoroutines
-		for i := 0; i < numGoroutines; i++ {
-			startRow := i * rowsPerGo
-			endRow := (i + 1) * rowsPerGo
-			if endRow > B {
-				endRow = B
-			}
-			if startRow >= endRow {
-				continue
-			}
 
-			wg.Add(1)
-			go func(sR, eR int) {
-				defer wg.Done()
-				for r := sR; r < eR; r++ {
-					offset := r * F
-					for c := 0; c < F; c++ {
-						outData[offset+c] = aData[offset+c] + bData[c]
-					}
+		if !ShouldParallelize(len(aData)) {
+			// common case: small batch/feature Linear layers (e.g. inside
+			// an RNN/LSTM cell) don't benefit from goroutine fan-out here.
+			for r := 0; r < B; r++ {
+				offset := r * F
+				for c := 0; c < F; c++ {
+					outData[offset+c] = aData[offset+c] + bData[c]
 				}
-			}(startRow, endRow) 
+			}
+		} else {
+			numGoroutines := runtime.NumCPU()
+			var wg sync.WaitGroup
+			rowsPerGo := (B + numGoroutines - 1) / numGoroutines
+			for i := 0; i < numGoroutines; i++ {
+				startRow := i * rowsPerGo
+				endRow := (i + 1) * rowsPerGo
+				if endRow > B {
+					endRow = B
+				}
+				if startRow >= endRow {
+					continue
+				}
+
+				wg.Add(1)
+				go func(sR, eR int) {
+					defer wg.Done()
+					for r := sR; r < eR; r++ {
+						offset := r * F
+						for c := 0; c < F; c++ {
+							outData[offset+c] = aData[offset+c] + bData[c]
+						}
+					}
+				}(startRow, endRow)
+			}
+			wg.Wait()
 		}
-		wg.Wait()
 	} else {
 		return nil, fmt.Errorf("unsupported broadcast: a=%v, b=%v. Only 4D+1D and 2D+1D supported", aShape, bShape)
 	}
@@ -900,37 +980,50 @@ func PrintTensor(t *Tensor) {
 
 // calculates the sum of a tensor along a given axis.
 // if keepDims is true, the summed axis is preserved with size 1.
-func Sum(t *Tensor, axis int, keepDims bool) *Tensor {
+// NOTE: only axis 0 of a 2D tensor is currently supported; other inputs
+// return an error instead of silently producing an empty/zero result.
+func Sum(t *Tensor, axis int, keepDims bool) (*Tensor, error) {
 	shape := t.GetShape()
+	if len(shape) != 2 {
+		return nil, fmt.Errorf("sum: only 2D tensors are currently supported, got shape %v", shape)
+	}
+	if axis != 0 {
+		return nil, fmt.Errorf("sum: only axis 0 is currently supported, got axis %d", axis)
+	}
+
 	data := t.GetData()
 	var newShape []int
-	var outData []float64
-
-	if axis == 0 {
-		outData = make([]float64, shape[1])
-		for j := 0; j < shape[1]; j++ {
-			sum := 0.0
-			for i := 0; i < shape[0]; i++ {
-				sum += data[i*shape[1]+j]
-			}
-			outData[j] = sum
+	outData := make([]float64, shape[1])
+	for j := 0; j < shape[1]; j++ {
+		sum := 0.0
+		for i := 0; i < shape[0]; i++ {
+			sum += data[i*shape[1]+j]
 		}
-		if keepDims {
-			newShape = []int{1, shape[1]}
-		} else {
-			newShape = []int{shape[1]}
-		}
+		outData[j] = sum
 	}
-	out, _ := NewTensor(newShape, outData)
-	return out
+	if keepDims {
+		newShape = []int{1, shape[1]}
+	} else {
+		newShape = []int{shape[1]}
+	}
+	return NewTensor(newShape, outData)
 }
 
 
 // calculates the mean of a tensor along a given axis.
-func Mean(t *Tensor, axis int, keepDims bool) *Tensor {
-	sum := Sum(t, axis, keepDims)
+func Mean(t *Tensor, axis int, keepDims bool) (*Tensor, error) {
+	sum, err := Sum(t, axis, keepDims)
+	if err != nil {
+		return nil, fmt.Errorf("mean: %w", err)
+	}
+	if axis < 0 || axis >= len(t.GetShape()) {
+		return nil, fmt.Errorf("mean: axis %d out of bounds for shape %v", axis, t.GetShape())
+	}
 	N := float64(t.GetShape()[axis])
-	return sum.MulScalar(1.0 / N)
+	if N == 0 {
+		return nil, fmt.Errorf("mean: cannot divide by zero-length axis %d", axis)
+	}
+	return sum.MulScalar(1.0 / N), nil
 }
 
 
@@ -946,11 +1039,21 @@ func (t *Tensor) Pow(scalar float64) *Tensor {
 
 
 // calculates the variance of a tensor along a given axis.
-func Var(t *Tensor, axis int, keepDims bool) *Tensor {
-	mean := Mean(t, axis, true) 
-	diff := Sub(t, mean)
+func Var(t *Tensor, axis int, keepDims bool) (*Tensor, error) {
+	mean, err := Mean(t, axis, true)
+	if err != nil {
+		return nil, fmt.Errorf("var: %w", err)
+	}
+	diff, err := Sub(t, mean)
+	if err != nil {
+		return nil, fmt.Errorf("var: %w", err)
+	}
 	sqDiff := diff.Pow(2)
-	return Mean(sqDiff, axis, keepDims)
+	result, err := Mean(sqDiff, axis, keepDims)
+	if err != nil {
+		return nil, fmt.Errorf("var: %w", err)
+	}
+	return result, nil
 }
 
 
@@ -976,15 +1079,18 @@ func (t *Tensor) MulScalar(scalar float64) *Tensor {
 }
 
 
-// subtracts tensor t2 from t1 (element-wise).
-// broadcasting for the case where t1 is a matrix and t2 is a vector (mean).
-func Sub(t1, t2 *Tensor) *Tensor {
-	outData := make([]float64, Numel(t1))
+// subtracts tensor t2 from t1 (element-wise), with broadcasting support
+// for the case where t1 is a matrix and t2 is a row vector (e.g. a mean).
+// Returns an error instead of silently producing a zero-filled result when
+// the shapes don't match a supported case.
+func Sub(t1, t2 *Tensor) (*Tensor, error) {
 	d1 := t1.GetData()
 	d2 := t2.GetData()
 
 	s1 := t1.GetShape()
 	s2 := t2.GetShape()
+
+	outData := make([]float64, Numel(t1))
 
 	if IsSameSize(t1, t2) {
 		for i := range d1 {
@@ -996,7 +1102,9 @@ func Sub(t1, t2 *Tensor) *Tensor {
 				outData[i*s1[1]+j] = d1[i*s1[1]+j] - d2[j]
 			}
 		}
+	} else {
+		return nil, fmt.Errorf("sub: unsupported shapes for subtraction/broadcast: %v and %v", s1, s2)
 	}
-	out, _ := NewTensor(s1, outData)
-	return out
+
+	return NewTensor(s1, outData)
 }

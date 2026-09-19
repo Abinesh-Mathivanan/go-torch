@@ -55,6 +55,151 @@ func RELU(t *tensor.Tensor) (*tensor.Tensor, error) {
 	return r, nil
 }
 
+// LeakyReLU: out = x if x > 0, else alpha*x. (alpha is a small constant, e.g., 0.01, avoids dying ReLU problem)
+func LeakyReLU(t *tensor.Tensor, alpha float64) (*tensor.Tensor, error) {
+	tData := t.GetData()
+	outData := make([]float64, len(tData))
+	for i, v := range tData {
+		if v > 0 {
+			outData[i] = v
+		} else {
+			outData[i] = alpha * v
+		}
+	}
+
+	r, err := tensor.NewTensor(t.GetShape(), outData)
+	if err != nil {
+		return nil, fmt.Errorf("leaky_relu failed to create output tensor: %w", err)
+	}
+
+	if t.RequiresGrad {
+		r.RequiresGrad = true
+		r.Parents = []*tensor.Tensor{t}
+		r.Operation = "leaky_relu"
+
+		r.BackwardFunc = func(grad *tensor.Tensor) {
+			if t.RequiresGrad {
+				if t.Grad == nil {
+					t.ZeroGrad()
+				}
+				gradData := grad.GetData()
+				parentGradData := t.Grad.GetData()
+				tData := t.GetData()
+
+				for i := range parentGradData {
+					if tData[i] > 0 {
+						parentGradData[i] += gradData[i]
+					} else {
+						parentGradData[i] += alpha * gradData[i]
+					}
+				}
+			}
+		}
+	}
+	return r, nil
+}
+
+// GELU (Gaussian Error Linear Unit): out = 0.5*x*(1 + tanh(sqrt(2/pi)*(x +0.044715*x^3))). 
+const geluCoeff = 0.7978845608028654 // sqrt(2/pi)
+
+func GELU(t *tensor.Tensor) (*tensor.Tensor, error) {
+	tData := t.GetData()
+	outData := make([]float64, len(tData))
+	// cache tanh(inner) per element since both the forward value and the
+	// backward derivative need it - avoids recomputing tanh in BackwardFunc.
+	tanhInner := make([]float64, len(tData))
+
+	for i, x := range tData {
+		inner := geluCoeff * (x + 0.044715*x*x*x)
+		th := math.Tanh(inner)
+		tanhInner[i] = th
+		outData[i] = 0.5 * x * (1 + th)
+	}
+
+	r, err := tensor.NewTensor(t.GetShape(), outData)
+	if err != nil {
+		return nil, fmt.Errorf("gelu failed to create output tensor: %w", err)
+	}
+
+	if t.RequiresGrad {
+		r.RequiresGrad = true
+		r.Parents = []*tensor.Tensor{t}
+		r.Operation = "gelu"
+
+		r.BackwardFunc = func(grad *tensor.Tensor) {
+			if t.RequiresGrad {
+				gradData := grad.GetData()
+				gradDataForT := make([]float64, len(tData))
+
+				for i, x := range tData {
+					th := tanhInner[i]
+					// d/dx [0.5*x*(1+tanh(inner))] = 0.5*(1+tanh(inner)) + 0.5*x*(1-tanh(inner)^2)*d(inner)/dx
+					// where d(inner)/dx = geluCoeff*(1 + 3*0.044715*x^2)
+					dInnerDx := geluCoeff * (1 + 3*0.044715*x*x)
+					deriv := 0.5*(1+th) + 0.5*x*(1-th*th)*dInnerDx
+					gradDataForT[i] = gradData[i] * deriv
+				}
+
+				gradTensorForT, err := tensor.NewTensor(t.GetShape(), gradDataForT)
+				if err != nil {
+					fmt.Printf("Warning: Failed to create gradient tensor for GELU backward: %v\n", err)
+					return
+				}
+				t.Backward(gradTensorForT)
+			}
+		}
+	}
+	return r, nil
+}
+
+
+// SiLU (Sigmoid Linear Unit, also called Swish): out = x * sigmoid(x).
+func SiLU(t *tensor.Tensor) (*tensor.Tensor, error) {
+	tData := t.GetData()
+	outData := make([]float64, len(tData))
+	sigmoidData := make([]float64, len(tData)) // cached for backward
+
+	for i, x := range tData {
+		s := 1.0 / (1.0 + math.Exp(-x))
+		sigmoidData[i] = s
+		outData[i] = x * s
+	}
+
+	r, err := tensor.NewTensor(t.GetShape(), outData)
+	if err != nil {
+		return nil, fmt.Errorf("silu failed to create output tensor: %w", err)
+	}
+
+	if t.RequiresGrad {
+		r.RequiresGrad = true
+		r.Parents = []*tensor.Tensor{t}
+		r.Operation = "silu"
+
+		r.BackwardFunc = func(grad *tensor.Tensor) {
+			if t.RequiresGrad {
+				gradData := grad.GetData()
+				gradDataForT := make([]float64, len(tData))
+
+				for i, x := range tData {
+					s := sigmoidData[i]
+					// d/dx [x*sigmoid(x)] = sigmoid(x) + x*sigmoid(x)*(1-sigmoid(x))
+					//                     = sigmoid(x)*(1 + x*(1-sigmoid(x)))
+					deriv := s * (1 + x*(1-s))
+					gradDataForT[i] = gradData[i] * deriv
+				}
+
+				gradTensorForT, err := tensor.NewTensor(t.GetShape(), gradDataForT)
+				if err != nil {
+					fmt.Printf("Warning: Failed to create gradient tensor for SiLU backward: %v\n", err)
+					return
+				}
+				t.Backward(gradTensorForT)
+			}
+		}
+	}
+	return r, nil
+}
+
 // we apply element wise sigmoid : out = 1 / (1 + exp(-t))
 func Sigmoid(t *tensor.Tensor) (*tensor.Tensor, error) {
 	tData := t.GetData()

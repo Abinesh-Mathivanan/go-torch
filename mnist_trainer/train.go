@@ -4,8 +4,10 @@ import (
 
 	"encoding/binary"
 	"fmt"
+	"go-torch/autograd"
 	"go-torch/nn"
 	"go-torch/optimizer"
+	"go-torch/safetensors"
 	"go-torch/tensor"
 	"io"
 	"log"
@@ -21,6 +23,12 @@ import (
 const (
 	mnistDir = "mnist_data"
 
+	// upper bounds used to sanity-check MNIST header fields before trusting
+	// them for an allocation size. Real MNIST files are ~60k images of
+	// 28x28, so these are generous but still protect against a corrupt or
+	// maliciously crafted file causing an int32 overflow or a huge alloc.
+	maxMNISTItems = 10_000_000
+	maxMNISTDim   = 1 << 16
 )
 
 
@@ -32,18 +40,41 @@ func loadImages(filepath string) (*tensor.Tensor, error) {
 	var reader io.Reader = file
 
 	var magic, numImages, numRows, numCols int32
-	binary.Read(reader, binary.BigEndian, &magic)
+	if err := binary.Read(reader, binary.BigEndian, &magic); err != nil {
+		return nil, fmt.Errorf("failed to read magic number from %s: %w", filepath, err)
+	}
 	if magic != 2051 {
 		return nil, fmt.Errorf("invalid magic number for images file: %d", magic)
 	}
 
-	binary.Read(reader, binary.BigEndian, &numImages)
-	binary.Read(reader, binary.BigEndian, &numRows)
-	binary.Read(reader, binary.BigEndian, &numCols)
+	if err := binary.Read(reader, binary.BigEndian, &numImages); err != nil {
+		return nil, fmt.Errorf("failed to read image count from %s: %w", filepath, err)
+	}
+	if err := binary.Read(reader, binary.BigEndian, &numRows); err != nil {
+		return nil, fmt.Errorf("failed to read row count from %s: %w", filepath, err)
+	}
+	if err := binary.Read(reader, binary.BigEndian, &numCols); err != nil {
+		return nil, fmt.Errorf("failed to read col count from %s: %w", filepath, err)
+	}
 
-	imageData := make([]byte, numImages*numRows*numCols)
+	// Validate header values before trusting them for an allocation size.
+	// Without this, a truncated/corrupt/crafted file can drive numImages *
+	// numRows * numCols to overflow int32 (wrapping to a small positive or
+	// negative number) and produce a mismatched allocation, or simply try
+	// to allocate an enormous slice.
+	if numImages <= 0 || numImages > maxMNISTItems {
+		return nil, fmt.Errorf("invalid image count in header: %d", numImages)
+	}
+	if numRows <= 0 || numRows > maxMNISTDim || numCols <= 0 || numCols > maxMNISTDim {
+		return nil, fmt.Errorf("invalid image dimensions in header: %dx%d", numRows, numCols)
+	}
+
+	totalBytes := int64(numImages) * int64(numRows) * int64(numCols)
+	imageData := make([]byte, totalBytes)
 	_, err = io.ReadFull(reader, imageData)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, fmt.Errorf("failed to read image data from %s (expected %d bytes): %w", filepath, totalBytes, err)
+	}
 
 	floatData := make([]float64, len(imageData))
 	for i, v := range imageData {
@@ -64,16 +95,25 @@ func loadLabels(filepath string) ([]int, error) {
 	var reader io.Reader = file
 	
 	var magic, numLabels int32
-	binary.Read(reader, binary.BigEndian, &magic)
+	if err := binary.Read(reader, binary.BigEndian, &magic); err != nil {
+		return nil, fmt.Errorf("failed to read magic number from %s: %w", filepath, err)
+	}
 	// 2049 is a magic number used to distinguish image files from label files
 	if magic != 2049 {
 		return nil, fmt.Errorf("invalid magic number for labels file: %d", magic)
 	}
-	binary.Read(reader, binary.BigEndian, &numLabels)
+	if err := binary.Read(reader, binary.BigEndian, &numLabels); err != nil {
+		return nil, fmt.Errorf("failed to read label count from %s: %w", filepath, err)
+	}
+	if numLabels <= 0 || numLabels > maxMNISTItems {
+		return nil, fmt.Errorf("invalid label count in header: %d", numLabels)
+	}
 
 	labelData := make([]byte, numLabels)
 	_, err = io.ReadFull(reader, labelData)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, fmt.Errorf("failed to read label data from %s: %w", filepath, err)
+	}
 
 	intLabels := make([]int, len(labelData))
 	for i, v := range labelData {
@@ -161,6 +201,54 @@ func (m *SimpleCNN) ZeroGrad() {
 	m.Linear2.ZeroGrad()
 }
 
+// NamedParameters builds a full state dict for the model - each parameter tensor is keyed by a name that includes the layer name and parameter type (e.g. "conv1.weight", "linear2.bias"). used for safetensors save/load.
+func (m *SimpleCNN) NamedParameters() map[string]*tensor.Tensor {
+	named := make(map[string]*tensor.Tensor)
+	for k, v := range m.Conv1.NamedParameters("conv1") {
+		named[k] = v
+	}
+	for k, v := range m.Conv2.NamedParameters("conv2") {
+		named[k] = v
+	}
+	for k, v := range m.Linear1.NamedParameters("linear1") {
+		named[k] = v
+	}
+	for k, v := range m.Linear2.NamedParameters("linear2") {
+		named[k] = v
+	}
+	return named
+}
+
+// writes the model's parameters to a safetensors file
+func (m *SimpleCNN) SaveSafetensors(filepath string) error {
+	metadata := map[string]string{"format": "go-torch-simplecnn-v1"}
+	if err := safetensors.Save(filepath, m.NamedParameters(), metadata); err != nil {
+		return fmt.Errorf("could not save safetensors checkpoint to %s: %w", filepath, err)
+	}
+	return nil
+}
+
+// reads a safetensors file and loads the model's parameters from it, checking that the shapes match
+func (m *SimpleCNN) LoadSafetensors(filepath string) error {
+	loaded, _, err := safetensors.Load(filepath)
+	if err != nil {
+		return fmt.Errorf("could not load safetensors checkpoint from %s: %w", filepath, err)
+	}
+
+	named := m.NamedParameters()
+	for name, dest := range named {
+		src, ok := loaded[name]
+		if !ok {
+			return fmt.Errorf("checkpoint %s is missing tensor %q required by this model", filepath, name)
+		}
+		if !tensor.IsSameSize(dest, src) {
+			return fmt.Errorf("checkpoint %s: tensor %q has shape %v, model expects %v", filepath, name, src.GetShape(), dest.GetShape())
+		}
+		copy(dest.GetData(), src.GetData())
+	}
+	return nil
+}
+
 func (m *SimpleCNN) Save(filepath string) error {
 	file, err := os.Create(filepath)
 	if err != nil {
@@ -177,19 +265,26 @@ func (m *SimpleCNN) Save(filepath string) error {
 	return nil
 }
 
-func (m *SimpleCNN) Load(filepath string) error {
-	file, err := os.Open(filepath)
-	if err != nil {
-		return fmt.Errorf("could not open file %s: %w", filepath, err)
+
+// loads model parameters from a gob file, checking that the shapes match
+func (m *SimpleCNN) Load(filepath string) (err error) {
+	file, openErr := os.Open(filepath)
+	if openErr != nil {
+		return fmt.Errorf("could not open file %s: %w", filepath, openErr)
 	}
 	defer file.Close()
 
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic while decoding model file %s (file may be corrupt or untrusted): %v", filepath, r)
+		}
+	}()
+
 	decoder := gob.NewDecoder(file)
-	
+
 	var savedParams []*tensor.Tensor
-	err = decoder.Decode(&savedParams)
-	if err != nil {
-		return fmt.Errorf("could not decode parameters from file %s: %w", filepath, err)
+	if decodeErr := decoder.Decode(&savedParams); decodeErr != nil {
+		return fmt.Errorf("could not decode parameters from file %s: %w", filepath, decodeErr)
 	}
 
 	modelParams := m.Parameters()
@@ -240,7 +335,7 @@ func main() {
 	learningRate := 0.01
 	batchSize := 32
 	epochs := 1
-	modelSavePath := "mnist_cnn.gob" // gob is the go compatible binary file (how pickle is to python)
+	modelSavePath := "mnist_cnn.safetensors" // named, shape-checked format 
 
 	model, err := NewSimpleCNN(numClasses)
 	if err != nil { log.Fatalf("Failed to create model: %v", err) }
@@ -296,11 +391,11 @@ func main() {
 			if err != nil { log.Fatalf("Epoch %d, batch %d: loss calculation failed: %v", epoch, i, err) }
 			runningLoss += loss.GetData()[0]
 
-			loss.Backward(nil)
+			autograd.Backward(loss)
 			err = optimizer.Step()
 			if err != nil { log.Fatalf("Epoch %d, batch %d: optimizer step failed: %v", epoch, i, err) }
 
-			// --- Logging ---
+			// logging
 			percentComplete := float64(i+1) / float64(numBatches) * 100
 			fmt.Printf("\rEpoch %d/%d [%-50s] %3.0f%% - Avg Loss: %.4f",
 				epoch+1,
@@ -315,7 +410,7 @@ func main() {
 		fmt.Printf("Epoch %d completed in %v.\n", epoch+1, epochDuration)
 
 
-		// -- Evaluation --
+		// eval 
 		fmt.Println("Running evaluation on test set...")
 		correct := 0
 		numTestSamples := testImages.GetShape()[0]
@@ -364,7 +459,7 @@ func main() {
 
 	// -- Save the Trained Model --
 	fmt.Printf("\nSaving trained model to %s...\n", modelSavePath)
-	err = model.Save(modelSavePath)
+	err = model.SaveSafetensors(modelSavePath)
 	if err != nil {
 		log.Fatalf("Error saving model: %v", err)
 	}
@@ -382,7 +477,7 @@ func main() {
 
 	// load the saved parameters into the new model instance.
 	fmt.Printf("Loading parameters from %s into new model instance...\n", modelSavePath)
-	err = newModel.Load(modelSavePath)
+	err = newModel.LoadSafetensors(modelSavePath)
 	if err != nil {
 		log.Fatalf("Error loading model: %v", err)
 	}

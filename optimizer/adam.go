@@ -121,3 +121,13 @@ func (a *Adam) ZeroGrad() {
 		p.ZeroGrad()
 	}
 }
+
+// SetLR updates the learning rate used by subsequent Step() calls.
+func (a *Adam) SetLR(lr float64) {
+	a.learningRate = lr
+}
+
+// GetLR returns the current learning rate.
+func (a *Adam) GetLR() float64 {
+	return a.learningRate
+}

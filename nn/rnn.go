@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go-torch/tensor"
 	"math/rand"
-	"time"
 )
 
 // RNNCell represents a single RNN cell that processes one timestep
@@ -22,7 +21,8 @@ func NewRNNCell(inputSize, hiddenSize int) (*RNNCell, error) {
 		return nil, fmt.Errorf("RNN cell dimensions must be positive, got input %d, hidden %d", inputSize, hiddenSize)
 	}
 
-	random := rand.New(rand.NewSource(time.Now().UnixNano()))
+	// Uses the global math/rand source instead of constructing a fresh rand.New(rand.NewSource(time.Now().UnixNano())) 
+	// per cell
 	
 	// Xavier initialization for better gradient flow
 	// stddev = sqrt(2.0 / (input_size + hidden_size))
@@ -31,7 +31,7 @@ func NewRNNCell(inputSize, hiddenSize int) (*RNNCell, error) {
 	// Initialize Wxh weights
 	wxhData := make([]float64, inputSize*hiddenSize)
 	for i := range wxhData {
-		wxhData[i] = (2*random.Float64() - 1) * stddev
+		wxhData[i] = (2*rand.Float64() - 1) * stddev
 	}
 	wxh, err := tensor.NewTensor([]int{inputSize, hiddenSize}, wxhData)
 	if err != nil {
@@ -42,7 +42,7 @@ func NewRNNCell(inputSize, hiddenSize int) (*RNNCell, error) {
 	// Initialize Whh weights
 	whhData := make([]float64, hiddenSize*hiddenSize)
 	for i := range whhData {
-		whhData[i] = (2*random.Float64() - 1) * stddev
+		whhData[i] = (2*rand.Float64() - 1) * stddev
 	}
 	whh, err := tensor.NewTensor([]int{hiddenSize, hiddenSize}, whhData)
 	if err != nil {
@@ -201,16 +201,19 @@ func (rnn *RNN) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	var outputs []*tensor.Tensor
 	inputData := input.GetData()
 
+	// Scratch buffer for the per-timestep slice, allocated once outside the
+	// loop instead of make()'d fresh every timestep. 
+	timestepData := make([]float64, batchSize*inputSize)
+
 	// Process each timestep
 	for t := 0; t < seqLength; t++ {
 		// Extract input for current timestep
-		timestepData := make([]float64, batchSize*inputSize)
 		for b := 0; b < batchSize; b++ {
 			srcStart := b*seqLength*inputSize + t*inputSize
 			dstStart := b * inputSize
 			copy(timestepData[dstStart:dstStart+inputSize], inputData[srcStart:srcStart+inputSize])
 		}
-		
+
 		timestepInput, err := tensor.NewTensor([]int{batchSize, inputSize}, timestepData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create timestep input: %w", err)
@@ -295,7 +298,7 @@ func NewLSTMCell(inputSize, hiddenSize int) (*LSTMCell, error) {
 		return nil, fmt.Errorf("LSTM cell dimensions must be positive, got input %d, hidden %d", inputSize, hiddenSize)
 	}
 
-	random := rand.New(rand.NewSource(time.Now().UnixNano()))
+	// Uses the global math/rand source - see the comment in NewRNNCell.
 	
 	// Combined input size (input + hidden)
 	combinedSize := inputSize + hiddenSize
@@ -305,7 +308,7 @@ func NewLSTMCell(inputSize, hiddenSize int) (*LSTMCell, error) {
 	createWeights := func() (*tensor.Tensor, error) {
 		data := make([]float64, combinedSize*hiddenSize)
 		for i := range data {
-			data[i] = (2*random.Float64() - 1) * stddev
+			data[i] = (2*rand.Float64() - 1) * stddev
 		}
 		w, err := tensor.NewTensor([]int{combinedSize, hiddenSize}, data)
 		if err != nil {
@@ -540,16 +543,19 @@ func (lstm *LSTM) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	var outputs []*tensor.Tensor
 	inputData := input.GetData()
 
+	// Scratch buffer for the per-timestep slice, allocated once outside the
+	// loop instead of make()'d fresh every timestep.
+	timestepData := make([]float64, batchSize*inputSize)
+
 	// Process each timestep
 	for t := 0; t < seqLength; t++ {
 		// Extract input for current timestep
-		timestepData := make([]float64, batchSize*inputSize)
 		for b := 0; b < batchSize; b++ {
 			srcStart := b*seqLength*inputSize + t*inputSize
 			dstStart := b * inputSize
 			copy(timestepData[dstStart:dstStart+inputSize], inputData[srcStart:srcStart+inputSize])
 		}
-		
+
 		timestepInput, err := tensor.NewTensor([]int{batchSize, inputSize}, timestepData)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create timestep input: %w", err)

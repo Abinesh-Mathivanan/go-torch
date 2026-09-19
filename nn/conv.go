@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go-torch/tensor"
 	"math/rand"
-	"time"
 )
 
 
@@ -20,11 +19,14 @@ type Conv2D struct {
 
 // creates a new Conv2D layer.
 func NewConv2D(inChannels, outChannels, kernelSize, stride, padding int) (*Conv2D, error) {
-	random := rand.New(rand.NewSource(time.Now().UnixNano()))
+	// Uses the global math/rand source rather than a fresh
+	// rand.New(rand.NewSource(time.Now().UnixNano())) per layer - avoids
+	// both the repeated construction cost and the risk of two layers
+	// created in the same nanosecond getting identical (correlated) seeds.
 	weightShape := []int{outChannels, inChannels, kernelSize, kernelSize}
 	weightData := make([]float64, outChannels*inChannels*kernelSize*kernelSize)
 	for i := range weightData {
-		weightData[i] = (2*random.Float64() - 1) * 0.1
+		weightData[i] = (2*rand.Float64() - 1) * 0.1
 	}
 	weights, err := tensor.NewTensor(weightShape, weightData)
 	if err != nil { return nil, fmt.Errorf("failed to create weight tensor: %w", err) }
@@ -111,6 +113,14 @@ func (c *Conv2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 
 func (c *Conv2D) Parameters() []*tensor.Tensor {
 	return []*tensor.Tensor{c.Weight, c.Bias}
+}
+
+// NamedParameters returns this layer's parameters keyed by name, prefixed (e.g. prefix="conv1" -> "conv1.weight", "conv1.bias").
+func (c *Conv2D) NamedParameters(prefix string) map[string]*tensor.Tensor {
+	return map[string]*tensor.Tensor{
+		prefix + ".weight": c.Weight,
+		prefix + ".bias":   c.Bias,
+	}
 }
 
 

@@ -11,6 +11,14 @@ type Optimizer interface {
 	ZeroGrad()
 }
 
+// LRSetter is implemented by optimizers that expose a mutable learning
+// rate, so an LR scheduler (see scheduler.go) can adjust it between steps
+// without needing to know which concrete optimizer it's driving.
+type LRSetter interface {
+	SetLR(lr float64)
+	GetLR() float64
+}
+
 
 // implements the Stochastic Gradient Descent optimizer, with optional momentum.
 type SGD struct {
@@ -102,4 +110,12 @@ func (s *SGD) ZeroGrad() {
 	for _, p := range s.parameters {
 		p.ZeroGrad()
 	}
+}
+
+func (s *SGD) SetLR(lr float64) {
+	s.learningRate = lr
+}
+
+func (s *SGD) GetLR() float64 {
+	return s.learningRate
 }

@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"go-torch/autograd"
 	"go-torch/nn"
 	"go-torch/tensor"
 )
@@ -194,9 +195,8 @@ func benchmarkForwardBackward_GoTorch(batchSize, inputDim, hiddenDim, outputDim 
 			log.Fatalf("GoTorch: Error in loss during forward/backward: %v", err)
 		}
 
-		// backward pass
 		if loss.RequiresGrad {
-			loss.Backward(nil)
+			autograd.Backward(loss)
 		}
 		totalDuration += time.Since(start)
 		// end there timer here

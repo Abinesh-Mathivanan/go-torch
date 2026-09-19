@@ -2,16 +2,15 @@ package nn
 
 import (
 	"fmt"
-	"math/rand"
-	"time"
 	"go-torch/tensor"
+	"math/rand"
 )
 
 
 // linear dense layer: output = input @ weight + bias
 type Linear struct {
-	weight *tensor.Tensor // Shape: [inputDimensions, outputDimensions]
-	bias   *tensor.Tensor   // Shape: [outputDimensions]
+	Weight *tensor.Tensor // Shape: [inputDimensions, outputDimensions]
+	Bias   *tensor.Tensor // Shape: [outputDimensions]
 }
 
 
@@ -24,17 +23,17 @@ func NewLinear(inputDimensions, outputDimensions int) (*Linear, error) {
 		return nil, fmt.Errorf("linear layer dimensions must be positive, got input %d, output %d", inputDimensions, outputDimensions)
 	}
 
-	random := rand.New(rand.NewSource(time.Now().UnixNano()))
+	// Uses the global math/rand source (rand.Float64 etc.) rather than
+	// constructing a fresh rand.New(rand.NewSource(...)) per layer.
 
-	//TODO: simple random initialization for now, consider scaling the weight assignment.
 	weightData := make([]float64, inputDimensions*outputDimensions)
 	for i := range weightData {
-		weightData[i] = 2*random.Float64() - 1
+		weightData[i] = 2*rand.Float64() - 1
 	}
 
 	biasData := make([]float64, outputDimensions)
 	for i := range biasData {
-		biasData[i] = 2*random.Float64() - 1 
+		biasData[i] = 2*rand.Float64() - 1 
 	}
 
 	weights, err := tensor.NewTensor([]int{inputDimensions, outputDimensions}, weightData)
@@ -52,7 +51,7 @@ func NewLinear(inputDimensions, outputDimensions int) (*Linear, error) {
 	bias.RequiresGrad = true
 
 
-	return &Linear{weight: weights, bias: bias}, nil
+	return &Linear{Weight: weights, Bias: bias}, nil
 }
 
 
@@ -67,7 +66,7 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	// batchSize := inputShape[0] // No longer needed for bias
 	inputDims := inputShape[1]
 
-	weightShape := l.weight.GetShape()
+	weightShape := l.Weight.GetShape()
 	weightInputDims := weightShape[0]
 	outputDims := weightShape[1]
 
@@ -75,7 +74,7 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("linear layer input dimension mismatch: input %d, weight expected %d", inputDims, weightInputDims)
 	}
 
-	biasShape := l.bias.GetShape()
+	biasShape := l.Bias.GetShape()
 	if len(biasShape) != 1 || biasShape[0] != outputDims {
 		return nil, fmt.Errorf("linear layer bias dimension mismatch: bias shape %v, expected [%d]", biasShape, outputDims)
 	}
@@ -83,12 +82,12 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	// input: [batch_size, input_dimensions]
 	// weight: [input_dimensions, output_dimensions]
 	// result (step): [batch_size, output_dimensions]
-	step, err := tensor.MatMulTensor(input, l.weight)
+	step, err := tensor.MatMulTensor(input, l.Weight)
 	if err != nil {
 		return nil, fmt.Errorf("linear layer matmul failed: %w", err)
 	}
 
-	output, err := tensor.AddTensorBroadcast(step, l.bias)
+	output, err := tensor.AddTensorBroadcast(step, l.Bias)
 	if err != nil {
 		return nil, fmt.Errorf("linear layer bias addition failed: %w", err)
 	}
@@ -100,24 +99,36 @@ func (l *Linear) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 // Parameters() returns the list of parameters in the layer that require gradients. i feed this for optimizers.
 func (l *Linear) Parameters() []*tensor.Tensor {
     params := []*tensor.Tensor{}
-    if l.weight != nil && l.weight.RequiresGrad {
-        params = append(params, l.weight)
+    if l.Weight != nil && l.Weight.RequiresGrad {
+        params = append(params, l.Weight)
     }
-     if l.bias != nil && l.bias.RequiresGrad {
-        params = append(params, l.bias)
+     if l.Bias != nil && l.Bias.RequiresGrad {
+        params = append(params, l.Bias)
     }
     return params
+}
+
+
+func (l *Linear) NamedParameters(prefix string) map[string]*tensor.Tensor {
+	named := make(map[string]*tensor.Tensor, 2)
+	if l.Weight != nil {
+		named[prefix+".weight"] = l.Weight
+	}
+	if l.Bias != nil {
+		named[prefix+".bias"] = l.Bias
+	}
+	return named
 }
 
 
 
 // ZeroGrad() calls ZeroGrad() on all parameters in the layer.
 func (l *Linear) ZeroGrad() {
-     if l.weight != nil {
-        l.weight.ZeroGrad()
+     if l.Weight != nil {
+        l.Weight.ZeroGrad()
      }
-     if l.bias != nil {
-        l.bias.ZeroGrad()
+     if l.Bias != nil {
+        l.Bias.ZeroGrad()
      }
 }
 

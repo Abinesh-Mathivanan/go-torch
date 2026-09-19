@@ -29,53 +29,70 @@ func Im2Col(input *Tensor, kernelHeight, kernelWidth, stride, padding int) (*Ten
 	colMatrixData := make([]float64, colMatrixShape[0]*colMatrixShape[1])
 
 	inputData := input.GetData()
-	numGoroutines := runtime.NumCPU()
-	var wg sync.WaitGroup
 
-	// Parallelize over the batch dimension
-	batchesPerGo := (batchSize + numGoroutines - 1) / numGoroutines
-	for i := 0; i < numGoroutines; i++ {
-		startBatch := i * batchesPerGo
-		endBatch := (i + 1) * batchesPerGo
-		if endBatch > batchSize {
-			endBatch = batchSize
-		}
+	// im2col's cost scales with kernelSize * batchSize * outputCols; for
+	// early conv layers (few channels, small kernel) or small batches this
+	// is only a few thousand iterations, where goroutine spawn/sync
+	// overhead outweighs the parallel win. Run sequentially in that case.
+	totalWork := kernelSize * batchSize * outputCols
 
-		if startBatch >= endBatch {
-			continue
-		}
+	fillBatch := func(b int) {
+		for c := 0; c < channels; c++ {
+			for kh := 0; kh < kernelHeight; kh++ {
+				for kw := 0; kw < kernelWidth; kw++ {
+					inputRowStart := kh - padding
+					inputColStart := kw - padding
+					for oh := 0; oh < outHeight; oh++ {
+						for ow := 0; ow < outWidth; ow++ {
+							inputRow := inputRowStart + oh*stride
+							inputCol := inputColStart + ow*stride
 
-		wg.Add(1)
-		go func(sB, eB int) {
-			defer wg.Done()
-			for b := sB; b < eB; b++ {
-				for c := 0; c < channels; c++ {
-					for kh := 0; kh < kernelHeight; kh++ {
-						for kw := 0; kw < kernelWidth; kw++ {
-							inputRowStart := kh - padding
-							inputColStart := kw - padding
-							for oh := 0; oh < outHeight; oh++ {
-								for ow := 0; ow < outWidth; ow++ {
-									inputRow := inputRowStart + oh*stride
-									inputCol := inputColStart + ow*stride
+							colRow := c*(kernelHeight*kernelWidth) + kh*kernelWidth + kw
+							colCol := b*outputCols + oh*outWidth + ow
+							destIndex := colRow*colMatrixShape[1] + colCol
 
-									colRow := c*(kernelHeight*kernelWidth) + kh*kernelWidth + kw
-									colCol := b*outputCols + oh*outWidth + ow
-									destIndex := colRow*colMatrixShape[1] + colCol
-
-									if inputRow >= 0 && inputRow < height && inputCol >= 0 && inputCol < width {
-										srcIndex := b*(channels*height*width) + c*(height*width) + inputRow*width + inputCol
-										colMatrixData[destIndex] = inputData[srcIndex]
-									}
-								}
+							if inputRow >= 0 && inputRow < height && inputCol >= 0 && inputCol < width {
+								srcIndex := b*(channels*height*width) + c*(height*width) + inputRow*width + inputCol
+								colMatrixData[destIndex] = inputData[srcIndex]
 							}
 						}
 					}
 				}
 			}
-		}(startBatch, endBatch)
+		}
 	}
-	wg.Wait()
+
+	if !ShouldParallelize(totalWork) {
+		for b := 0; b < batchSize; b++ {
+			fillBatch(b)
+		}
+	} else {
+		numGoroutines := runtime.NumCPU()
+		var wg sync.WaitGroup
+
+		// Parallelize over the batch dimension
+		batchesPerGo := (batchSize + numGoroutines - 1) / numGoroutines
+		for i := 0; i < numGoroutines; i++ {
+			startBatch := i * batchesPerGo
+			endBatch := (i + 1) * batchesPerGo
+			if endBatch > batchSize {
+				endBatch = batchSize
+			}
+
+			if startBatch >= endBatch {
+				continue
+			}
+
+			wg.Add(1)
+			go func(sB, eB int) {
+				defer wg.Done()
+				for b := sB; b < eB; b++ {
+					fillBatch(b)
+				}
+			}(startBatch, endBatch)
+		}
+		wg.Wait()
+	}
 
 	colMatrix, err := NewTensor(colMatrixShape, colMatrixData)
 	if err != nil {
@@ -101,54 +118,65 @@ func Col2Im(cols *Tensor, inputShape []int, kernelHeight, kernelWidth, stride, p
 	colsData := cols.GetData()
 	colsShape := cols.GetShape()
 
-	numGoroutines := runtime.NumCPU()
-	var wg sync.WaitGroup
-	
 	totalJobs := batchSize * channels
-	jobsPerGo := (totalJobs + numGoroutines - 1) / numGoroutines
+	totalWork := totalJobs * kernelHeight * kernelWidth * outHeight * outWidth
 
-	for i := 0; i < numGoroutines; i++ {
-		startJob := i * jobsPerGo
-		endJob := startJob + jobsPerGo
-		if endJob > totalJobs {
-			endJob = totalJobs
-		}
-
-		if startJob >= endJob {
-			continue
-		}
-
-		wg.Add(1)
-		go func(start, end int) {
-			defer wg.Done()
-			for job := start; job < end; job++ {
-				b := job / channels
-				c := job % channels
-				// The inner loops are now executed within a safe parallel context,
-				// as each goroutine works on a different batch/channel combo.
-				for kh := 0; kh < kernelHeight; kh++ {
-					for kw := 0; kw < kernelWidth; kw++ {
-						inputRowStart := kh - padding
-						inputColStart := kw - padding
-						for oh := 0; oh < outHeight; oh++ {
-							for ow := 0; ow < outWidth; ow++ {
-								inputRow := inputRowStart + oh*stride
-								inputCol := inputColStart + ow*stride
-								if inputRow >= 0 && inputRow < height && inputCol >= 0 && inputCol < width {
-									colRow := c*(kernelHeight*kernelWidth) + kh*kernelWidth + kw
-									colCol := b*outHeight*outWidth + oh*outWidth + ow
-									srcIndex := colRow*colsShape[1] + colCol
-									destIndex := b*(channels*height*width) + c*(height*width) + inputRow*width + inputCol
-									imgData[destIndex] += colsData[srcIndex]
-								}
-							}
+	fillJob := func(job int) {
+		b := job / channels
+		c := job % channels
+		for kh := 0; kh < kernelHeight; kh++ {
+			for kw := 0; kw < kernelWidth; kw++ {
+				inputRowStart := kh - padding
+				inputColStart := kw - padding
+				for oh := 0; oh < outHeight; oh++ {
+					for ow := 0; ow < outWidth; ow++ {
+						inputRow := inputRowStart + oh*stride
+						inputCol := inputColStart + ow*stride
+						if inputRow >= 0 && inputRow < height && inputCol >= 0 && inputCol < width {
+							colRow := c*(kernelHeight*kernelWidth) + kh*kernelWidth + kw
+							colCol := b*outHeight*outWidth + oh*outWidth + ow
+							srcIndex := colRow*colsShape[1] + colCol
+							destIndex := b*(channels*height*width) + c*(height*width) + inputRow*width + inputCol
+							imgData[destIndex] += colsData[srcIndex]
 						}
 					}
 				}
 			}
-		}(startJob, endJob)
+		}
 	}
-	wg.Wait()
+
+	if !ShouldParallelize(totalWork) {
+		for job := 0; job < totalJobs; job++ {
+			fillJob(job)
+		}
+	} else {
+		numGoroutines := runtime.NumCPU()
+		var wg sync.WaitGroup
+		jobsPerGo := (totalJobs + numGoroutines - 1) / numGoroutines
+
+		for i := 0; i < numGoroutines; i++ {
+			startJob := i * jobsPerGo
+			endJob := startJob + jobsPerGo
+			if endJob > totalJobs {
+				endJob = totalJobs
+			}
+
+			if startJob >= endJob {
+				continue
+			}
+
+			wg.Add(1)
+			go func(start, end int) {
+				defer wg.Done()
+				// The inner loops are now executed within a safe parallel context,
+				// as each goroutine works on a different batch/channel combo.
+				for job := start; job < end; job++ {
+					fillJob(job)
+				}
+			}(startJob, endJob)
+		}
+		wg.Wait()
+	}
 
 	imgTensor, err := NewTensor(inputShape, imgData)
 	if err != nil {

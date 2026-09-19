@@ -36,52 +36,63 @@ func (p *MaxPooling2D) Forward(input *tensor.Tensor) (*tensor.Tensor, error) {
 	maxIndices := make([]int, len(outData))
 	inputData := input.GetData()
 
-	numGoroutines := runtime.NumCPU()
-	var wg sync.WaitGroup
-	
 	totalJobs := b * c
-	jobsPerGo := (totalJobs + numGoroutines - 1) / numGoroutines
+	totalWork := totalJobs * outH * outW * p.KernelSize * p.KernelSize
 
-	for i := 0; i < numGoroutines; i++ {
-		startJob := i * jobsPerGo
-		endJob := (i + 1) * jobsPerGo
-		if endJob > totalJobs {
-			endJob = totalJobs
-		}
-		if startJob >= endJob {
-			continue
-		}
-
-		wg.Add(1)
-		go func(s, e int) {
-			defer wg.Done()
-			for job := s; job < e; job++ {
-				i := job / c
-				j := job % c
-				for k := 0; k < outH; k++ {
-					for l := 0; l < outW; l++ {
-						maxVal := -math.MaxFloat64
-						maxIndex := -1
-						hStart, wStart := k*p.Stride, l*p.Stride
-						for y := 0; y < p.KernelSize; y++ {
-							for x := 0; x < p.KernelSize; x++ {
-								srcH, srcW := hStart+y, wStart+x
-								srcIndex := i*(c*h*w) + j*(h*w) + srcH*w + srcW
-								if inputData[srcIndex] > maxVal {
-									maxVal = inputData[srcIndex]
-									maxIndex = srcIndex
-								}
-							}
+	fillJob := func(job int) {
+		i := job / c
+		j := job % c
+		for k := 0; k < outH; k++ {
+			for l := 0; l < outW; l++ {
+				maxVal := -math.MaxFloat64
+				maxIndex := -1
+				hStart, wStart := k*p.Stride, l*p.Stride
+				for y := 0; y < p.KernelSize; y++ {
+					for x := 0; x < p.KernelSize; x++ {
+						srcH, srcW := hStart+y, wStart+x
+						srcIndex := i*(c*h*w) + j*(h*w) + srcH*w + srcW
+						if inputData[srcIndex] > maxVal {
+							maxVal = inputData[srcIndex]
+							maxIndex = srcIndex
 						}
-						destIndex := i*(c*outH*outW) + j*(outH*outW) + k*outW + l
-						outData[destIndex] = maxVal
-						maxIndices[destIndex] = maxIndex
 					}
 				}
+				destIndex := i*(c*outH*outW) + j*(outH*outW) + k*outW + l
+				outData[destIndex] = maxVal
+				maxIndices[destIndex] = maxIndex
 			}
-		}(startJob, endJob)
+		}
 	}
-	wg.Wait()
+
+	if !tensor.ShouldParallelize(totalWork) {
+		for job := 0; job < totalJobs; job++ {
+			fillJob(job)
+		}
+	} else {
+		numGoroutines := runtime.NumCPU()
+		var wg sync.WaitGroup
+		jobsPerGo := (totalJobs + numGoroutines - 1) / numGoroutines
+
+		for i := 0; i < numGoroutines; i++ {
+			startJob := i * jobsPerGo
+			endJob := (i + 1) * jobsPerGo
+			if endJob > totalJobs {
+				endJob = totalJobs
+			}
+			if startJob >= endJob {
+				continue
+			}
+
+			wg.Add(1)
+			go func(s, e int) {
+				defer wg.Done()
+				for job := s; job < e; job++ {
+					fillJob(job)
+				}
+			}(startJob, endJob)
+		}
+		wg.Wait()
+	}
 
 	output, err := tensor.NewTensor(outShape, outData)
 	if err != nil { return nil, err }
