@@ -14,14 +14,14 @@ blog - https://abinesh-mathivanan.vercel.app/en/posts/post-5/
 - **losses**: CrossEntropyLoss
 - **optimizers**: SGD (with momentum), Adam, AdamW (decoupled weight decay), RMSProp
 - **training utilities**: gradient clipping (by norm or by value), LR schedulers (StepLR, CosineAnnealingLR, WarmupScheduler)
-- **model checkpointing**: [safetensors](https://github.com/huggingface/safetensors) save/load - named and shape-checked, so a renamed/reordered/added layer fails loudly instead of silently loading into the wrong slot. A legacy positional `gob` format is also still available.
+- **model checkpointing**: save/load - named and shape-checked, so a renamed/reordered/added layer fails loudly instead of silently loading into the wrong slot. A legacy positional `gob` format is also still available.
 - **optimized performance**: BLAS-backed matrix multiply (falls back to a parallel pure-Go path below a tuned size threshold), and a size-aware parallelization policy applied across the board so small tensors (e.g. RNN/LSTM per-timestep ops) don't pay goroutine overhead for no benefit. Tunable via the `GOTORCH_PARALLEL_THRESHOLD` environment variable
 
 <br/>
 
 ## dependencies
 
-Just one: [`gonum.org/v1/gonum`](https://pkg.go.dev/gonum.org/v1/gonum), used for BLAS-backed matrix multiplication. Everything else - training loop, layers, optimizers, checkpointing, the stdout logger - is standard library only.
+Just one: [`gonum.org/v1/gonum`](https://pkg.go.dev/gonum.org/v1/gonum), used for BLAS-backed matrix multiplication. Rest are stdlib.
 
 <br/>
 
